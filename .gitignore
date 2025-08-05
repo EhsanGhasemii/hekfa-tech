@@ -1,2 +1,19 @@
 # all zip files
 *.zip
+
+# all build directories
+*build/
+
+# all images
+*.jpg
+*.jpeg
+
+# all tgz
+*.tgz
+
+
+# 
+*onnxruntime-linux-x64-gpu-1.17.3/
+*opencv/
+*buffalo_l/
+

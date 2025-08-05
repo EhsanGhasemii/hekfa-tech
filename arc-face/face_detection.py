@@ -7,7 +7,7 @@ face_app = FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider'])
 face_app.prepare(ctx_id=0)  # Use GPU (CUDA)
 
 # Load image
-img = cv2.imread('t1.webp')  # Replace with your image filename
+img = cv2.imread('persons.jpg')  # Replace with your image filename
 if img is None:
     raise FileNotFoundError("Image not found!")
 
