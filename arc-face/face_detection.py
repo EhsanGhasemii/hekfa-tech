@@ -30,7 +30,37 @@ print(f"Output image saved as: {output_path}")
 
 
 import onnxruntime
+import onnx
 import numpy as np
+from skimage import transform as trans
+
+arcface_dst = np.array(
+    [[38.2946, 51.6963], [73.5318, 51.5014], [56.0252, 71.7366],
+     [41.5493, 92.3655], [70.7299, 92.2041]],
+    dtype=np.float32)
+
+def estimate_norm(lmk, image_size=112,mode='arcface'):
+    assert lmk.shape == (5, 2)
+    assert image_size%112==0 or image_size%128==0
+    if image_size%112==0:
+        ratio = float(image_size)/112.0
+        diff_x = 0
+    else:
+        ratio = float(image_size)/128.0
+        diff_x = 8.0*ratio
+    dst = arcface_dst * ratio
+    dst[:,0] += diff_x
+    tform = trans.SimilarityTransform()
+    tform.estimate(lmk, dst)
+    M = tform.params[0:2, :]
+    return M
+
+def norm_crop(img, landmark, image_size=112, mode='arcface'):
+    M = estimate_norm(landmark, image_size, mode)
+    warped = cv2.warpAffine(img, M, (image_size, image_size), borderValue=0.0)
+    return warped
+
+
 
 def distance2bbox(points, distance, max_shape=None):
     """Decode distance prediction to bounding box.
@@ -305,9 +335,91 @@ if max_num > 0 and det.shape[0] > max_num:
         kpss = kpss[bindex, :]
 
 
-print('det: ', det)
-print('kpss: ', kpss)
+# print('det: ', det)
+# print('kpss: ', kpss)
 # return det, kpss
+
+
+
+
+
+
+
+
+
+
+
+
+# Arc-face Init
+model_file = recognition_model_path
+taskname = 'recognition'
+find_sub = False
+find_mul = False
+model = onnx.load(model_file)
+graph = model.graph
+for nid, node in enumerate(graph.node[:8]):
+    #print(nid, node.name)
+    if node.name.startswith('Sub') or node.name.startswith('_minus'):
+        find_sub = True
+    if node.name.startswith('Mul') or node.name.startswith('_mul'):
+        find_mul = True
+if find_sub and find_mul:
+    #mxnet arcface model
+    input_mean = 0.0
+    input_std = 1.0
+else:
+    input_mean = 127.5
+    input_std = 127.5
+session = onnxruntime.InferenceSession(model_file, None)
+input_cfg = session.get_inputs()[0]
+input_shape = input_cfg.shape
+input_name = input_cfg.name
+input_size = tuple(input_shape[2:4][::-1])
+outputs = session.get_outputs()
+output_names = []
+for out in outputs:
+    output_names.append(out.name)
+output_shape = outputs[0].shape
+
+
+
+
+# Arc-face prepare
+if ctx_id<0:
+    session.set_providers(['CPUExecutionProvider'])
+
+
+
+ret = []
+for i in range(det.shape[0]):
+    bbox = det[i, 0:4]
+    det_score = det[i, 4]
+    kps = None
+    if kpss is not None:
+        kps = kpss[i]
+
+    face = {'bbox':bbox, 'kps':kps, 'det_score':det_score}
+
+
+    # Arc-face get
+    aimg = norm_crop(img, landmark=face['kps'], image_size=input_size[0])
+#     face.embedding = self.get_feat(aimg).flatten()
+#     return face.embedding
+
+    # Arc-face get-feat
+    if not isinstance(aimg, list):
+        aimg = [aimg]
+    
+    blob = cv2.dnn.blobFromImages(aimg, 1.0 / input_std, input_size,
+                                  (input_mean, input_mean, input_mean), swapRB=True)
+    face['embedding'] = session.run(output_names, {input_name: blob})[0]
+    ret.append(face)
+
+
+
+
+
+
 
 
 
