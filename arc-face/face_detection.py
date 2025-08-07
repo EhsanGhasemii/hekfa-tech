@@ -64,17 +64,6 @@ def norm_crop(img, landmark, image_size=112, mode='arcface'):
 
 
 def distance2bbox(points, distance, max_shape=None):
-    """Decode distance prediction to bounding box.
-
-    Args:
-        points (Tensor): Shape (n, 2), [x, y].
-        distance (Tensor): Distance from the given point to 4
-            boundaries (left, top, right, bottom).
-        max_shape (tuple): Shape of the image.
-
-    Returns:
-        Tensor: Decoded bboxes.
-    """
     x1 = points[:, 0] - distance[:, 0]
     y1 = points[:, 1] - distance[:, 1]
     x2 = points[:, 0] + distance[:, 2]
@@ -87,17 +76,6 @@ def distance2bbox(points, distance, max_shape=None):
     return np.stack([x1, y1, x2, y2], axis=-1)
 
 def distance2kps(points, distance, max_shape=None):
-    """Decode distance prediction to bounding box.
-
-    Args:
-        points (Tensor): Shape (n, 2), [x, y].
-        distance (Tensor): Distance from the given point to 4
-            boundaries (left, top, right, bottom).
-        max_shape (tuple): Shape of the image.
-
-    Returns:
-        Tensor: Decoded bboxes.
-    """
     preds = []
     for i in range(0, distance.shape[1], 2):
         px = points[:, i%2] + distance[:, i]
@@ -110,7 +88,6 @@ def distance2kps(points, distance, max_shape=None):
     return np.stack(preds, axis=-1)
 
 def nms(dets, nms_thresh):
-    print('RetinaFaceFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF')
     thresh = nms_thresh
     x1 = dets[:, 0]
     y1 = dets[:, 1]
@@ -255,20 +232,24 @@ input_size = tuple(det_img.shape[0:2][::-1])
 blob = cv2.dnn.blobFromImage(det_img, 1.0/input_std, input_size, (input_mean, input_mean, input_mean), swapRB=True)
 net_outs = session.run(output_names, {input_name : blob})
 
-for net in net_outs: 
-    print('@@ net shape: ', net.shape)
 
 input_height = blob.shape[2]
 input_width = blob.shape[3]
 
-print('@@ blob: ', blob.shape)
 
+print('_feat_stride_fpn: ', _feat_stride_fpn)
 for idx, stride in enumerate(_feat_stride_fpn):
+    print('idx: ', idx)
+    print('stride: ', stride)
     scores = net_outs[idx]
+    print('scores: ', scores.shape)
     bbox_preds = net_outs[idx+fmc]
+    print('bbox_preds: ', bbox_preds.shape)
     bbox_preds = bbox_preds * stride
+    print('bbox_preds: ', bbox_preds.shape)
     if use_kps:
         kps_preds = net_outs[idx+fmc*2] * stride
+        print('kps_preds: ', kps_preds.shape)
     height = input_height // stride
     width = input_width // stride
     K = height * width

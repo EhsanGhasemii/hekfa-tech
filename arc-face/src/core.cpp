@@ -3,6 +3,112 @@
 #include <string>
 #include <onnxruntime_cxx_api.h>
 #include <opencv2/opencv.hpp>
+#include <numeric>
+#include <tuple>
+#include <map>
+
+
+// Converts distances to bounding boxes
+cv::Mat distance2bbox(const cv::Mat& points, const cv::Mat& distance, const cv::Size& max_shape = cv::Size()) {
+    CV_Assert(points.cols == 2 && distance.cols == 4);
+
+    cv::Mat x1 = points.col(0) - distance.col(0);
+    cv::Mat y1 = points.col(1) - distance.col(1);
+    cv::Mat x2 = points.col(0) + distance.col(2);
+    cv::Mat y2 = points.col(1) + distance.col(3);
+
+    if (max_shape.width > 0 && max_shape.height > 0) {
+        cv::min(cv::max(x1, 0), max_shape.width, x1);
+        cv::min(cv::max(y1, 0), max_shape.height, y1);
+        cv::min(cv::max(x2, 0), max_shape.width, x2);
+        cv::min(cv::max(y2, 0), max_shape.height, y2);
+    }
+
+    std::vector<cv::Mat> bboxes = {x1, y1, x2, y2};
+    cv::Mat result;
+    cv::merge(bboxes, result);
+    return result;
+}
+
+// Converts distances to keypoints
+cv::Mat distance2kps(const cv::Mat& points, const cv::Mat& distance, const cv::Size& max_shape = cv::Size()) {
+    CV_Assert(points.rows == distance.rows);
+    CV_Assert(distance.cols % 2 == 0);
+
+    std::vector<cv::Mat> preds;
+    for (int i = 0; i < distance.cols; i += 2) {
+        cv::Mat px = points.col(i % 2) + distance.col(i);
+        cv::Mat py = points.col((i % 2 + 1) % 2) + distance.col(i + 1);
+
+        if (max_shape.width > 0 && max_shape.height > 0) {
+            cv::min(cv::max(px, 0), max_shape.width, px);
+            cv::min(cv::max(py, 0), max_shape.height, py);
+        }
+
+        preds.push_back(px);
+        preds.push_back(py);
+    }
+
+    cv::Mat result;
+    cv::merge(preds, result);
+    return result;
+}
+
+// Non-maximum suppression
+std::vector<int> nms(const cv::Mat& dets, float thresh) {
+    std::vector<float> x1, y1, x2, y2, scores;
+    for (int i = 0; i < dets.rows; ++i) {
+        x1.push_back(dets.at<float>(i, 0));
+        y1.push_back(dets.at<float>(i, 1));
+        x2.push_back(dets.at<float>(i, 2));
+        y2.push_back(dets.at<float>(i, 3));
+        scores.push_back(dets.at<float>(i, 4));
+    }
+
+    std::vector<float> areas;
+    for (size_t i = 0; i < x1.size(); ++i) {
+        areas.push_back((x2[i] - x1[i] + 1) * (y2[i] - y1[i] + 1));
+    }
+
+    std::vector<int> order(x1.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(), [&](int i, int j) { return scores[i] > scores[j]; });
+
+    std::vector<int> keep;
+    while (!order.empty()) {
+        int i = order[0];
+        keep.push_back(i);
+
+        std::vector<int> rem(order.begin() + 1, order.end());
+        std::vector<int> new_order;
+
+        for (int j : rem) {
+            float xx1 = std::max(x1[i], x1[j]);
+            float yy1 = std::max(y1[i], y1[j]);
+            float xx2 = std::min(x2[i], x2[j]);
+            float yy2 = std::min(y2[i], y2[j]);
+
+            float w = std::max(0.0f, xx2 - xx1 + 1);
+            float h = std::max(0.0f, yy2 - yy1 + 1);
+            float inter = w * h;
+            float ovr = inter / (areas[i] + areas[j] - inter);
+
+            if (ovr <= thresh) {
+                new_order.push_back(j);
+            }
+        }
+
+        order = new_order;
+    }
+
+    return keep;
+}
+
+
+
+
+
+
 
 int main() {
     const std::string detection_model_path = "/root/.insightface/models/buffalo_l/det_10g.onnx";
@@ -10,6 +116,11 @@ int main() {
     // Assumptions from earlier context
     float input_mean = 127.5f;
     float input_std = 128.0f;
+
+    int fmc = 3;
+    std::vector<int> _feat_stride_fpn = {8, 16, 32};
+    int _num_anchors = 2;
+    bool use_kps = true;
 
     Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "Detection");
     Ort::SessionOptions session_options;
@@ -127,7 +238,7 @@ int main() {
     }
 
     // 256: Run session
-    auto output_tensors = session.Run(
+    auto net_outs = session.Run(
         Ort::RunOptions{nullptr},
         &in_name,
         &input_tensor,
@@ -136,15 +247,9 @@ int main() {
         out_names.size()
     );
 
-    // 251-253: Placeholder lists
-    std::vector<cv::Mat> scores_list;
-    std::vector<cv::Mat> bboxes_list;
-    std::vector<cv::Mat> kpss_list;
-
-
-
-    for (size_t i = 0; i < output_tensors.size(); ++i) {
-        Ort::Value& output_tensor = output_tensors[i];
+    // print output of the model
+    for (size_t i = 0; i < net_outs.size(); ++i) {
+        Ort::Value& output_tensor = net_outs[i];
 
         if (!output_tensor.IsTensor()) {
             std::cout << "Output " << i << " is not a tensor." << std::endl;
@@ -175,9 +280,40 @@ int main() {
     }
 
 
+    // 251-253: Placeholder lists
+    std::vector<cv::Mat> scores_list;
+    std::vector<cv::Mat> bboxes_list;
+    std::vector<cv::Mat> kpss_list;
+
+    std::map<std::tuple<int, int, int>, cv::Mat> center_cache;
 
 
+    Ort::Value& first_output = net_outs[3];
+    Ort::TensorTypeAndShapeInfo shape_info = first_output.GetTensorTypeAndShapeInfo();
+    std::vector<int64_t> shape = shape_info.GetShape();
+    int total_len = shape_info.GetElementCount();
 
+    
+    int rows = static_cast<int>(shape[0]);
+    int cols = static_cast<int>(shape[1]);
+
+    // Extract raw data
+    float* data = first_output.GetTensorMutableData<float>();
+
+    // Print elements
+    std::cout << "First Output Tensor (raw values):" << std::endl;
+//     for (int i = 0; i < total_len; ++i) {
+//         std::cout << data[i] << " ";
+//     }
+    std::cout << "total len: " << total_len << std::endl; 
+    std::cout << "rows: " << rows << std::endl; 
+    std::cout << "cols: " << cols << std::endl; 
+    std::cout << std::endl;
+
+
+    for (uint32_t i = 0; i < _feat_stride_fpn.size(); ++i) { 
+      std::cout << "kk: " << _feat_stride_fpn[i] << std::endl; 
+    } 
 
 
 
