@@ -1,126 +1,187 @@
 #include <iostream>
 #include <vector>
 #include <string>
-#include <fstream>
-
 #include <onnxruntime_cxx_api.h>
 #include <opencv2/opencv.hpp>
 
-using namespace std;
-using namespace cv;
-using namespace Ort;
-
-const int INPUT_WIDTH = 640;
-const int INPUT_HEIGHT = 640;
-
-// Preprocess image: Resize, BGR → RGB, Normalize, CHW
-cv::Mat preprocess(const cv::Mat& img) {
-    cv::Mat resized, rgb, float_img;
-    cv::resize(img, resized, cv::Size(INPUT_WIDTH, INPUT_HEIGHT));
-    cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
-    rgb.convertTo(float_img, CV_32FC3, 1.0 / 127.5, -1.0);  // Normalize to [-1, 1]
-
-    // Convert HWC to CHW
-    std::vector<cv::Mat> channels(3);
-    cv::split(float_img, channels);
-    cv::Mat chw;
-    cv::vconcat(channels, chw);  // C x H x W
-
-    return chw;
-}
-
 int main() {
+    const std::string detection_model_path = "/root/.insightface/models/buffalo_l/det_10g.onnx";
+
+    // Assumptions from earlier context
+    float input_mean = 127.5f;
+    float input_std = 128.0f;
+
+    Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "Detection");
+    Ort::SessionOptions session_options;
+    Ort::Session session(env, detection_model_path.c_str(), session_options);
+
+    Ort::AllocatorWithDefaultOptions allocator;
+
+    // Inputs
+    size_t num_inputs = session.GetInputCount();
+    std::cout << "Number of inputs: " << num_inputs << std::endl;
+    auto input_name_ptr = session.GetInputNameAllocated(0, allocator);
+    std::string input_name = input_name_ptr.get();
+    std::cout << "Input name: " << input_name << std::endl;
+
+    // Outputs
+    size_t num_outputs = session.GetOutputCount();
+    std::cout << "Number of outputs: " << num_outputs << std::endl;
+
+    std::vector<std::string> output_names;
+    for (size_t i = 0; i < num_outputs; ++i) {
+        auto output_name_ptr = session.GetOutputNameAllocated(i, allocator);
+        std::string output_name = output_name_ptr.get();
+        output_names.emplace_back(output_name);
+        std::cout << "Output " << i << " name: " << output_name << std::endl;
+    }
 
     // Load image
-    std::string image_path = "persons.jpg";
-    cv::Mat img = cv::imread(image_path);
+    cv::Mat img = cv::imread("persons.jpg");
     if (img.empty()) {
-        std::cerr << "❌ Failed to load image: " << image_path << std::endl;
+        std::cerr << "Error loading image!" << std::endl;
         return -1;
     }
 
-    // Preprocess
-    cv::Mat input_tensor = preprocess(img);
+    // Assuming input_size is std::pair<int, int> as (width, height)
+    std::pair<int64_t, int64_t> input_size = {640, 640};  // example, replace with your actual input size
 
-    // Load model
-    std::string model_path = "buffalo_l/det_10g.onnx";
-    Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "detector");
-    Ort::SessionOptions session_options;
-    session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
+    // Compute aspect ratios
+    float im_ratio = static_cast<float>(img.rows) / img.cols;  // image height / width
+    float model_ratio = static_cast<float>(input_size.second) / input_size.first;  // height / width
 
-    // NOTE: Do NOT add CUDA or GPU execution provider to force CPU execution
-    // session_options.AppendExecutionProvider_CUDA(0);  // <-- remove/comment out this line if exists
+    int new_width, new_height;
 
-    Ort::Session session(env, model_path.c_str(), session_options);
-
-    // Get input/output names
-    Ort::AllocatorWithDefaultOptions allocator;
-    auto input_name_ptr = session.GetInputNameAllocated(0, allocator);
-    auto output_name0_ptr = session.GetOutputNameAllocated(0, allocator);
-    auto output_name1_ptr = session.GetOutputNameAllocated(1, allocator);
-    auto output_name2_ptr = session.GetOutputNameAllocated(2, allocator);
-
-    const char* input_name = input_name_ptr.get();
-    const char* output_name0 = output_name0_ptr.get();
-    const char* output_name1 = output_name1_ptr.get();
-    const char* output_name2 = output_name2_ptr.get();
-
-    // Build input tensor
-    std::vector<int64_t> input_shape = {1, 3, INPUT_HEIGHT, INPUT_WIDTH};
-    size_t tensor_size = 1 * 3 * INPUT_HEIGHT * INPUT_WIDTH;
-    std::vector<float> input_data(tensor_size);
-    std::memcpy(input_data.data(), input_tensor.data, tensor_size * sizeof(float));
-
-    Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-    auto input_tensor_onnx = Ort::Value::CreateTensor<float>(
-        memory_info, input_data.data(), tensor_size, input_shape.data(), input_shape.size());
-
-    // Run inference
-    std::array<const char*, 1> input_names = {input_name};
-    std::array<const char*, 3> output_names = {output_name0, output_name1, output_name2};
-    auto output_tensors = session.Run(Ort::RunOptions{nullptr},
-                                      input_names.data(), &input_tensor_onnx, 1,
-                                      output_names.data(), 3);
-
-    // Get raw model outputs
-    float* boxes = output_tensors[0].GetTensorMutableData<float>();
-    float* landmarks = output_tensors[1].GetTensorMutableData<float>();  // not used here, but available
-    float* scores = output_tensors[2].GetTensorMutableData<float>();
-
-    auto boxes_shape = output_tensors[0].GetTensorTypeAndShapeInfo().GetShape();  // [1, N, 4]
-    size_t num_faces = boxes_shape[1];
-
-    cout << "🔍 Total detected faces: " << num_faces << endl;
-
-    int face_count = 0;
-
-    for (size_t i = 0; i < num_faces; ++i) {
-        float score = scores[i];
-        if (score < 0.5f) continue;  // confidence threshold
-
-        float x1 = boxes[i * 4 + 0] * img.cols / INPUT_WIDTH;
-        float y1 = boxes[i * 4 + 1] * img.rows / INPUT_HEIGHT;
-        float x2 = boxes[i * 4 + 2] * img.cols / INPUT_WIDTH;
-        float y2 = boxes[i * 4 + 3] * img.rows / INPUT_HEIGHT;
-
-        cout << "Face " << face_count << " → score: " << score
-             << " | box: (" << x1 << ", " << y1 << ") - (" << x2 << ", " << y2 << ")\n";
-
-        cv::rectangle(img, cv::Point(int(x1), int(y1)), cv::Point(int(x2), int(y2)),
-                      cv::Scalar(0, 255, 0), 2);
-
-        face_count++;
+    if (im_ratio > model_ratio) {
+        new_height = static_cast<int>(input_size.second);
+        new_width = static_cast<int>(new_height / im_ratio);
+    } else {
+        new_width = static_cast<int>(input_size.first);
+        new_height = static_cast<int>(new_width * im_ratio);
     }
 
-    // Save output image
-    cv::imwrite("output.jpg", img);
-    cout << "✅ Output image saved as output.jpg" << endl;
+    float det_scale = static_cast<float>(new_height) / img.rows;
 
-    // Save detected face count to file
-    std::ofstream ofs("faces.txt");
-    ofs << face_count << std::endl;
-    ofs.close();
-    cout << "✅ Face count saved in faces.txt" << endl;
+    // Resize image to new_width x new_height
+    cv::Mat resized_img;
+    cv::resize(img, resized_img, cv::Size(new_width, new_height));
+
+    // Create black image with input size (height x width x 3)
+    cv::Mat det_img = cv::Mat::zeros(input_size.second, input_size.first, CV_8UC3);
+
+    // Copy resized image to the top-left corner of det_img
+    resized_img.copyTo(det_img(cv::Rect(0, 0, new_width, new_height)));
+
+    // For demonstration:
+    printf("new_height: %d\n", new_height); 
+    printf("new_width: %d\n", new_width);
+    printf("im_ratio: %.8f\n", im_ratio); 
+    printf("model_ratio: %.8f\n", model_ratio);
+
+    std::cout << "Original image size: " << img.cols << "x" << img.rows << std::endl;
+    std::cout << "Resized image size: " << new_width << "x" << new_height << std::endl;
+    std::cout << "Detection image size: " << det_img.cols << "x" << det_img.rows << std::endl;
+    std::cout << "Detection scale: " << det_scale << std::endl;
+
+    // Optional: Save or display det_img
+    // cv::imwrite("det_img.jpg", det_img);
+    // cv::imshow("Det Image", det_img);
+    // cv::waitKey(0);
+
+
+    // 254: Get input size from det_img
+    cv::Size bolb_input_size(det_img.cols, det_img.rows);  // reversed shape
+
+    // 255: Create blob
+    cv::Mat blob = cv::dnn::blobFromImage(
+        det_img,                        // image
+        1.0 / input_std,               // scalefactor
+        bolb_input_size,                    // size
+        cv::Scalar(input_mean, input_mean, input_mean),  // mean subtraction
+        true,                          // swapRB
+        false                          // crop
+    );
+
+    // 258-259: Blob shape
+    int input_height = blob.size[2];
+    int input_width = blob.size[3];
+
+    // 256: Prepare input tensor
+    std::vector<int64_t> input_tensor_shape = {1, blob.size[1], blob.size[2], blob.size[3]};
+    size_t input_tensor_size = 1;
+    for (auto dim : input_tensor_shape) input_tensor_size *= dim;
+
+    Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+    Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
+        memory_info,
+        reinterpret_cast<float*>(blob.data),
+        input_tensor_size,
+        input_tensor_shape.data(),
+        input_tensor_shape.size()
+    );
+
+    const char* in_name = input_name.c_str();  // Use actual input name
+    std::vector<const char*> out_names;
+    for (const auto& name : output_names) {
+        out_names.push_back(name.c_str());  // Convert std::string to const char*
+    }
+
+    // 256: Run session
+    auto output_tensors = session.Run(
+        Ort::RunOptions{nullptr},
+        &in_name,
+        &input_tensor,
+        1,
+        out_names.data(),
+        out_names.size()
+    );
+
+    // 251-253: Placeholder lists
+    std::vector<cv::Mat> scores_list;
+    std::vector<cv::Mat> bboxes_list;
+    std::vector<cv::Mat> kpss_list;
+
+
+
+    for (size_t i = 0; i < output_tensors.size(); ++i) {
+        Ort::Value& output_tensor = output_tensors[i];
+
+        if (!output_tensor.IsTensor()) {
+            std::cout << "Output " << i << " is not a tensor." << std::endl;
+            continue;
+        }
+
+        // Get shape
+        Ort::TensorTypeAndShapeInfo shape_info = output_tensor.GetTensorTypeAndShapeInfo();
+        std::vector<int64_t> shape = shape_info.GetShape();
+        size_t total_len = shape_info.GetElementCount();
+
+        std::cout << "Output " << i << " shape: [";
+        for (size_t j = 0; j < shape.size(); ++j) {
+            std::cout << shape[j];
+            if (j < shape.size() - 1) std::cout << ", ";
+        }
+        std::cout << "]" << std::endl;
+
+        // Assuming float output
+        float* float_array = output_tensor.GetTensorMutableData<float>();
+
+//         std::cout << "Output " << i << " values:" << std::endl;
+//         for (size_t j = 0; j < total_len; ++j) {
+//             std::cout << float_array[j] << " ";
+//             if ((j + 1) % 10 == 0) std::cout << std::endl;
+//         }
+//         std::cout << std::endl;
+    }
+
+
+
+
+
+
+
+
+
 
     return 0;
 }

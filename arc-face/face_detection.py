@@ -1,34 +1,35 @@
+# import cv2
+# import insightface
+# from insightface.app import FaceAnalysis
+# 
+# # Initialize the face analysis model
+# face_app = FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider'])
+# face_app.prepare(ctx_id=0)  # Use GPU (CUDA)
+# 
+# # Load image
+# img = cv2.imread('persons.jpg')  # Replace with your image filename
+# if img is None:
+#     raise FileNotFoundError("Image not found!")
+# 
+# # Detect faces
+# faces = face_app.get(img)
+# 
+# # Draw results on image
+# for face in faces:
+#     x1, y1, x2, y2 = map(int, face.bbox)
+#     cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+# 
+#     # Draw facial landmarks
+#     for (x, y) in face.kps:
+#         cv2.circle(img, (int(x), int(y)), 2, (255, 0, 0), -1)
+# 
+# # Save result image
+# output_path = 'output.jpg'
+# cv2.imwrite(output_path, img)
+# print(f"Output image saved as: {output_path}")
+# 
+# 
 import cv2
-import insightface
-from insightface.app import FaceAnalysis
-
-# Initialize the face analysis model
-face_app = FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider'])
-face_app.prepare(ctx_id=0)  # Use GPU (CUDA)
-
-# Load image
-img = cv2.imread('persons.jpg')  # Replace with your image filename
-if img is None:
-    raise FileNotFoundError("Image not found!")
-
-# Detect faces
-faces = face_app.get(img)
-
-# Draw results on image
-for face in faces:
-    x1, y1, x2, y2 = map(int, face.bbox)
-    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-    # Draw facial landmarks
-    for (x, y) in face.kps:
-        cv2.circle(img, (int(x), int(y)), 2, (255, 0, 0), -1)
-
-# Save result image
-output_path = 'output.jpg'
-cv2.imwrite(output_path, img)
-print(f"Output image saved as: {output_path}")
-
-
 import onnxruntime
 import onnx
 import numpy as np
@@ -238,6 +239,14 @@ det_img = np.zeros( (input_size[1], input_size[0], 3), dtype=np.uint8 )
 det_img[:new_height, :new_width, :] = resized_img
 
 
+print('@@ img shape: ', img.shape)
+print('@@ input_size shape: ', input_size)
+print('@@ im_ratio: ', im_ratio)
+print('@@ model_ratio: ', model_ratio)
+print('@@ new_height: ', new_height)
+print('@@ new_width: ', new_width)
+
+
 # detection_model.forward
 scores_list = []
 bboxes_list = []
@@ -246,8 +255,13 @@ input_size = tuple(det_img.shape[0:2][::-1])
 blob = cv2.dnn.blobFromImage(det_img, 1.0/input_std, input_size, (input_mean, input_mean, input_mean), swapRB=True)
 net_outs = session.run(output_names, {input_name : blob})
 
+for net in net_outs: 
+    print('@@ net shape: ', net.shape)
+
 input_height = blob.shape[2]
 input_width = blob.shape[3]
+
+print('@@ blob: ', blob.shape)
 
 for idx, stride in enumerate(_feat_stride_fpn):
     scores = net_outs[idx]
@@ -285,143 +299,143 @@ for idx, stride in enumerate(_feat_stride_fpn):
         kpss_list.append(pos_kpss)
 # return scores_list, bboxes_list, kpss_list
 
-
-
-
-
-
-
-
-
-
-
-
-
-# scores_list, bboxes_list, kpss_list = self.forward(det_img, self.det_thresh)
-
-scores = np.vstack(scores_list)
-scores_ravel = scores.ravel()
-order = scores_ravel.argsort()[::-1]
-bboxes = np.vstack(bboxes_list) / det_scale
-if use_kps:
-    kpss = np.vstack(kpss_list) / det_scale
-pre_det = np.hstack((bboxes, scores)).astype(np.float32, copy=False)
-pre_det = pre_det[order, :]
-keep = nms(pre_det, nms_thresh)
-det = pre_det[keep, :]
-if use_kps:
-    kpss = kpss[order,:,:]
-    kpss = kpss[keep,:,:]
-else:
-    kpss = None
-if max_num > 0 and det.shape[0] > max_num:
-    area = (det[:, 2] - det[:, 0]) * (det[:, 3] -
-                                            det[:, 1])
-    img_center = img.shape[0] // 2, img.shape[1] // 2
-    offsets = np.vstack([
-        (det[:, 0] + det[:, 2]) / 2 - img_center[1],
-        (det[:, 1] + det[:, 3]) / 2 - img_center[0]
-    ])
-    offset_dist_squared = np.sum(np.power(offsets, 2.0), 0)
-    if metric=='max':
-        values = area
-    else:
-        values = area - offset_dist_squared * 2.0  # some extra weight on the centering
-    bindex = np.argsort(
-        values)[::-1]  # some extra weight on the centering
-    bindex = bindex[0:max_num]
-    det = det[bindex, :]
-    if kpss is not None:
-        kpss = kpss[bindex, :]
-
-
-# print('det: ', det)
-# print('kpss: ', kpss)
-# return det, kpss
-
-
-
-
-
-
-
-
-
-
-
-
-# Arc-face Init
-model_file = recognition_model_path
-taskname = 'recognition'
-find_sub = False
-find_mul = False
-model = onnx.load(model_file)
-graph = model.graph
-for nid, node in enumerate(graph.node[:8]):
-    #print(nid, node.name)
-    if node.name.startswith('Sub') or node.name.startswith('_minus'):
-        find_sub = True
-    if node.name.startswith('Mul') or node.name.startswith('_mul'):
-        find_mul = True
-if find_sub and find_mul:
-    #mxnet arcface model
-    input_mean = 0.0
-    input_std = 1.0
-else:
-    input_mean = 127.5
-    input_std = 127.5
-session = onnxruntime.InferenceSession(model_file, None)
-input_cfg = session.get_inputs()[0]
-input_shape = input_cfg.shape
-input_name = input_cfg.name
-input_size = tuple(input_shape[2:4][::-1])
-outputs = session.get_outputs()
-output_names = []
-for out in outputs:
-    output_names.append(out.name)
-output_shape = outputs[0].shape
-
-
-
-
-# Arc-face prepare
-if ctx_id<0:
-    session.set_providers(['CPUExecutionProvider'])
-
-
-
-ret = []
-for i in range(det.shape[0]):
-    bbox = det[i, 0:4]
-    det_score = det[i, 4]
-    kps = None
-    if kpss is not None:
-        kps = kpss[i]
-
-    face = {'bbox':bbox, 'kps':kps, 'det_score':det_score}
-
-
-    # Arc-face get
-    aimg = norm_crop(img, landmark=face['kps'], image_size=input_size[0])
-#     face.embedding = self.get_feat(aimg).flatten()
-#     return face.embedding
-
-    # Arc-face get-feat
-    if not isinstance(aimg, list):
-        aimg = [aimg]
-    
-    blob = cv2.dnn.blobFromImages(aimg, 1.0 / input_std, input_size,
-                                  (input_mean, input_mean, input_mean), swapRB=True)
-    face['embedding'] = session.run(output_names, {input_name: blob})[0]
-    ret.append(face)
-
-
-
-
-
-
-
-
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# # scores_list, bboxes_list, kpss_list = self.forward(det_img, self.det_thresh)
+# 
+# scores = np.vstack(scores_list)
+# scores_ravel = scores.ravel()
+# order = scores_ravel.argsort()[::-1]
+# bboxes = np.vstack(bboxes_list) / det_scale
+# if use_kps:
+#     kpss = np.vstack(kpss_list) / det_scale
+# pre_det = np.hstack((bboxes, scores)).astype(np.float32, copy=False)
+# pre_det = pre_det[order, :]
+# keep = nms(pre_det, nms_thresh)
+# det = pre_det[keep, :]
+# if use_kps:
+#     kpss = kpss[order,:,:]
+#     kpss = kpss[keep,:,:]
+# else:
+#     kpss = None
+# if max_num > 0 and det.shape[0] > max_num:
+#     area = (det[:, 2] - det[:, 0]) * (det[:, 3] -
+#                                             det[:, 1])
+#     img_center = img.shape[0] // 2, img.shape[1] // 2
+#     offsets = np.vstack([
+#         (det[:, 0] + det[:, 2]) / 2 - img_center[1],
+#         (det[:, 1] + det[:, 3]) / 2 - img_center[0]
+#     ])
+#     offset_dist_squared = np.sum(np.power(offsets, 2.0), 0)
+#     if metric=='max':
+#         values = area
+#     else:
+#         values = area - offset_dist_squared * 2.0  # some extra weight on the centering
+#     bindex = np.argsort(
+#         values)[::-1]  # some extra weight on the centering
+#     bindex = bindex[0:max_num]
+#     det = det[bindex, :]
+#     if kpss is not None:
+#         kpss = kpss[bindex, :]
+# 
+# 
+# # print('det: ', det)
+# # print('kpss: ', kpss)
+# # return det, kpss
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# # Arc-face Init
+# model_file = recognition_model_path
+# taskname = 'recognition'
+# find_sub = False
+# find_mul = False
+# model = onnx.load(model_file)
+# graph = model.graph
+# for nid, node in enumerate(graph.node[:8]):
+#     #print(nid, node.name)
+#     if node.name.startswith('Sub') or node.name.startswith('_minus'):
+#         find_sub = True
+#     if node.name.startswith('Mul') or node.name.startswith('_mul'):
+#         find_mul = True
+# if find_sub and find_mul:
+#     #mxnet arcface model
+#     input_mean = 0.0
+#     input_std = 1.0
+# else:
+#     input_mean = 127.5
+#     input_std = 127.5
+# session = onnxruntime.InferenceSession(model_file, None)
+# input_cfg = session.get_inputs()[0]
+# input_shape = input_cfg.shape
+# input_name = input_cfg.name
+# input_size = tuple(input_shape[2:4][::-1])
+# outputs = session.get_outputs()
+# output_names = []
+# for out in outputs:
+#     output_names.append(out.name)
+# output_shape = outputs[0].shape
+# 
+# 
+# 
+# 
+# # Arc-face prepare
+# if ctx_id<0:
+#     session.set_providers(['CPUExecutionProvider'])
+# 
+# 
+# 
+# ret = []
+# for i in range(det.shape[0]):
+#     bbox = det[i, 0:4]
+#     det_score = det[i, 4]
+#     kps = None
+#     if kpss is not None:
+#         kps = kpss[i]
+# 
+#     face = {'bbox':bbox, 'kps':kps, 'det_score':det_score}
+# 
+# 
+#     # Arc-face get
+#     aimg = norm_crop(img, landmark=face['kps'], image_size=input_size[0])
+# #     face.embedding = self.get_feat(aimg).flatten()
+# #     return face.embedding
+# 
+#     # Arc-face get-feat
+#     if not isinstance(aimg, list):
+#         aimg = [aimg]
+#     
+#     blob = cv2.dnn.blobFromImages(aimg, 1.0 / input_std, input_size,
+#                                   (input_mean, input_mean, input_mean), swapRB=True)
+#     face['embedding'] = session.run(output_names, {input_name: blob})[0]
+#     ret.append(face)
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
 
 
 
