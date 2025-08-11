@@ -100,6 +100,7 @@ def nms(dets, nms_thresh):
 
     keep = []
     while order.size > 0:
+        print('order: ', x1[order[1:]])
         i = order[0]
         keep.append(i)
         xx1 = np.maximum(x1[i], x1[order[1:]])
@@ -114,6 +115,8 @@ def nms(dets, nms_thresh):
 
         inds = np.where(ovr <= thresh)[0]
         order = order[inds + 1]
+        print('inds: ', inds)
+        print('-' * 50)
 
     return keep
 
@@ -152,7 +155,7 @@ print('outputs: ', outputs)
 taskname = 'detection'
 center_cache = {}
 nms_thresh = 0.4
-det_thresh = 0.5
+dket_thresh = 0.5
 
 input_cfg = session.get_inputs()[0]
 input_shape = input_cfg.shape
@@ -238,27 +241,34 @@ input_width = blob.shape[3]
 
 
 print('_feat_stride_fpn: ', _feat_stride_fpn)
+print('fmc: ', fmc)
 for idx, stride in enumerate(_feat_stride_fpn):
     print('idx: ', idx)
     print('stride: ', stride)
     scores = net_outs[idx]
-    print('scores: ', scores.shape)
     bbox_preds = net_outs[idx+fmc]
-    print('bbox_preds: ', bbox_preds.shape)
     bbox_preds = bbox_preds * stride
-    print('bbox_preds: ', bbox_preds.shape)
     if use_kps:
         kps_preds = net_outs[idx+fmc*2] * stride
-        print('kps_preds: ', kps_preds.shape)
+
+
     height = input_height // stride
     width = input_width // stride
     K = height * width
     key = (height, width, stride)
+
+    print('height: ', height)
+    print('input_height: ', input_height)
+    print('width: ', width)
+    print('input_width: ', input_width)
+    print('K: ', K)
+    print('key: ', key)
+    print('det_thresh: ', det_thresh)
+    print('_num_anchors: ', _num_anchors)
     if key in center_cache:
         anchor_centers = center_cache[key]
     else:
         anchor_centers = np.stack(np.mgrid[:height, :width][::-1], axis=-1).astype(np.float32)
-        #print(anchor_centers.shape)
 
         anchor_centers = (anchor_centers * stride).reshape( (-1, 2) )
         if _num_anchors>1:
@@ -267,43 +277,47 @@ for idx, stride in enumerate(_feat_stride_fpn):
             center_cache[key] = anchor_centers
 
     pos_inds = np.where(scores>=det_thresh)[0]
+    print('pos_inds: ', pos_inds)
+    print('anchor_centers: ', anchor_centers.shape)
+    print('bbox_preds: ', bbox_preds.shape)
     bboxes = distance2bbox(anchor_centers, bbox_preds)
     pos_scores = scores[pos_inds]
     pos_bboxes = bboxes[pos_inds]
     scores_list.append(pos_scores)
     bboxes_list.append(pos_bboxes)
+
     if use_kps:
         kpss = distance2kps(anchor_centers, kps_preds)
-        #kpss = kps_preds
         kpss = kpss.reshape( (kpss.shape[0], -1, 2) )
         pos_kpss = kpss[pos_inds]
         kpss_list.append(pos_kpss)
+
+
+    print('=' * 40)
+
 # return scores_list, bboxes_list, kpss_list
 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
+
 # # scores_list, bboxes_list, kpss_list = self.forward(det_img, self.det_thresh)
-# 
-# scores = np.vstack(scores_list)
-# scores_ravel = scores.ravel()
-# order = scores_ravel.argsort()[::-1]
-# bboxes = np.vstack(bboxes_list) / det_scale
-# if use_kps:
-#     kpss = np.vstack(kpss_list) / det_scale
-# pre_det = np.hstack((bboxes, scores)).astype(np.float32, copy=False)
-# pre_det = pre_det[order, :]
-# keep = nms(pre_det, nms_thresh)
-# det = pre_det[keep, :]
+
+scores = np.vstack(scores_list)
+scores_ravel = scores.ravel()
+order = scores_ravel.argsort()[::-1]
+
+bboxes = np.vstack(bboxes_list) / det_scale
+if use_kps:
+    kpss = np.vstack(kpss_list) / det_scale
+pre_det = np.hstack((bboxes, scores)).astype(np.float32, copy=False)
+pre_det = pre_det[order, :]
+print('pre_det: ', pre_det)
+keep = nms(pre_det, nms_thresh)
+det = pre_det[keep, :]
+
+
+
+
+
+
 # if use_kps:
 #     kpss = kpss[order,:,:]
 #     kpss = kpss[keep,:,:]

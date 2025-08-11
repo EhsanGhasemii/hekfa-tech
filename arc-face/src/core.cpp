@@ -7,52 +7,144 @@
 #include <tuple>
 #include <map>
 
+#include "vector.h"             // library to print our matrices
 
-// Converts distances to bounding boxes
-cv::Mat distance2bbox(const cv::Mat& points, const cv::Mat& distance, const cv::Size& max_shape = cv::Size()) {
-    CV_Assert(points.cols == 2 && distance.cols == 4);
 
-    cv::Mat x1 = points.col(0) - distance.col(0);
-    cv::Mat y1 = points.col(1) - distance.col(1);
-    cv::Mat x2 = points.col(0) + distance.col(2);
-    cv::Mat y2 = points.col(1) + distance.col(3);
+void create_anchor_centers(
+  float** anchor_centers_x,
+  float** anchor_centers_y,
+  
+  int height, 
+  int width, 
+  int stride, 
+  int _num_anchors
+) { 
 
-    if (max_shape.width > 0 && max_shape.height > 0) {
-        cv::min(cv::max(x1, 0), max_shape.width, x1);
-        cv::min(cv::max(y1, 0), max_shape.height, y1);
-        cv::min(cv::max(x2, 0), max_shape.width, x2);
-        cv::min(cv::max(y2, 0), max_shape.height, y2);
-    }
+  * anchor_centers_x = (float*) malloc(height * width * _num_anchors * sizeof(float));
+  * anchor_centers_y = (float*) malloc(height * width * _num_anchors * sizeof(float));
 
-    std::vector<cv::Mat> bboxes = {x1, y1, x2, y2};
-    cv::Mat result;
-    cv::merge(bboxes, result);
-    return result;
+  for (uint32_t i = 0; i < height; ++i) { 
+    for (uint32_t j = 0; j < width; ++j) { 
+      for (uint32_t k = 0; k < _num_anchors; ++k) { 
+        (*anchor_centers_x)[i * width * _num_anchors + j * _num_anchors + k] = j * stride; 
+        (*anchor_centers_y)[i * width * _num_anchors + j * _num_anchors + k] = i * stride; 
+      } // iterate over k from 0 to width
+    } // iterate over j from 0 to height
+  } // iterate over i from 0 to _num_anchors
+} // void create_anchor_centers
+
+
+std::vector<int> np_where(
+  float* data_in, 
+  int size, 
+  float det_thresh
+) { 
+  
+  // create output result
+  std::vector<int> out; 
+
+  for (uint32_t i = 0; i < size; ++i) { 
+    if (data_in[i] > det_thresh) { 
+      out.push_back(i); 
+    } 
+  } // iterate over i from 0 to size
+
+  return out; 
+
+} // std::vector<float> np_where
+
+std::vector<std::vector<float>> distance2bbox(
+  float** anchor_centers_x, 
+  float** anchor_centers_y, 
+  float** bbox_preds, 
+  uint32_t size
+) { 
+
+  // create output matrix
+  std::vector<std::vector<float>> out; 
+
+  for (uint32_t i = 0; i < size; ++i) { 
+    std::vector<float> temp; 
+    float x1 = (*anchor_centers_x)[i] - (*bbox_preds)[4*i+0]; 
+    float y1 = (*anchor_centers_y)[i] - (*bbox_preds)[4*i+1]; 
+    float x2 = (*anchor_centers_x)[i] + (*bbox_preds)[4*i+2]; 
+    float y2 = (*anchor_centers_y)[i] + (*bbox_preds)[4*i+3]; 
+
+    temp.push_back(x1); 
+    temp.push_back(y1); 
+    temp.push_back(x2); 
+    temp.push_back(y2); 
+
+    out.push_back(temp); 
+  } // iterate over i from 0 to size
+
+  return out; 
+
+} // std::vector<std::vector<int>> distance2bbox 
+
+void np_extract(
+  float* scores, 
+  std::vector<int> pos_inds, 
+  std::vector<float>& out 
+) { 
+
+  for (uint32_t i = 0; i < pos_inds.size(); ++i) { 
+    float temp = scores[pos_inds[i]]; 
+    out.push_back(temp); 
+  } // iterate over i from 0 to pos_inds size
+} // std::vector<std::vector<float>> np_extract
+
+
+
+void np_extract(
+  std::vector<std::vector<float>> bboxes, 
+  std::vector<int> pos_inds, 
+  std::vector<std::vector<float>>& out, 
+  float det_scale = 1.0
+) { 
+
+  for (uint32_t i = 0; i < pos_inds.size(); ++i) { 
+    std::vector<float> temp = bboxes[pos_inds[i]]; 
+    out.push_back(temp); 
+  } // iterate over i from 0 to pos_inds size
+
+} // std::vector<std::vector<float>> np_extract
+
+std::vector<std::vector<float>> distance2kps(
+  float** anchor_centers_x, 
+  float** anchor_centers_y, 
+  float** kps_preds, 
+  int kps_rows, 
+  int kps_cols
+) { 
+
+  // create output matrix
+  std::vector<std::vector<float>> out; 
+
+  for (uint32_t i = 0; i < kps_rows; ++i) { 
+    std::vector<float> temp; 
+    for (uint32_t j = 0; j < kps_cols; j=j+2) { 
+      float px = (*anchor_centers_x)[i] + (*kps_preds)[i * kps_cols + j]; 
+      float py = (*anchor_centers_y)[i] + (*kps_preds)[i * kps_cols + j+1]; 
+      temp.push_back(px); 
+      temp.push_back(py); 
+    } 
+    out.push_back(temp); 
+  } 
+
+  return out; 
+} // std::vector<std::vector<float>> distance2kps 
+
+std::vector<size_t> argsort(const std::vector<float>& v) {
+    std::vector<size_t> idx(v.size());
+      for (size_t i = 0; i < idx.size(); i++) idx[i] = i;
+
+    sort(idx.begin(), idx.end(),
+         [&v](size_t i1, size_t i2) { return v[i1] > v[i2]; });
+
+    return idx;
 }
 
-// Converts distances to keypoints
-cv::Mat distance2kps(const cv::Mat& points, const cv::Mat& distance, const cv::Size& max_shape = cv::Size()) {
-    CV_Assert(points.rows == distance.rows);
-    CV_Assert(distance.cols % 2 == 0);
-
-    std::vector<cv::Mat> preds;
-    for (int i = 0; i < distance.cols; i += 2) {
-        cv::Mat px = points.col(i % 2) + distance.col(i);
-        cv::Mat py = points.col((i % 2 + 1) % 2) + distance.col(i + 1);
-
-        if (max_shape.width > 0 && max_shape.height > 0) {
-            cv::min(cv::max(px, 0), max_shape.width, px);
-            cv::min(cv::max(py, 0), max_shape.height, py);
-        }
-
-        preds.push_back(px);
-        preds.push_back(py);
-    }
-
-    cv::Mat result;
-    cv::merge(preds, result);
-    return result;
-}
 
 // Non-maximum suppression
 std::vector<int> nms(const cv::Mat& dets, float thresh) {
@@ -121,6 +213,8 @@ int main() {
     std::vector<int> _feat_stride_fpn = {8, 16, 32};
     int _num_anchors = 2;
     bool use_kps = true;
+    float det_thresh = 0.5;
+
 
     Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "Detection");
     Ort::SessionOptions session_options;
@@ -279,14 +373,7 @@ int main() {
 //         std::cout << std::endl;
     }
 
-
-    // 251-253: Placeholder lists
-    std::vector<cv::Mat> scores_list;
-    std::vector<cv::Mat> bboxes_list;
-    std::vector<cv::Mat> kpss_list;
-
     std::map<std::tuple<int, int, int>, cv::Mat> center_cache;
-
 
     Ort::Value& first_output = net_outs[3];
     Ort::TensorTypeAndShapeInfo shape_info = first_output.GetTensorTypeAndShapeInfo();
@@ -310,13 +397,149 @@ int main() {
     std::cout << "cols: " << cols << std::endl; 
     std::cout << std::endl;
 
+    // create data for bbox_preds
+    std::vector<int> sizes = {12800, 3200, 800}; 
+//     std::vector<std::vector<float>> scores_list;
+    std::vector<float> scores_list;
+    std::vector<std::vector<float>> bboxes_list; 
+    std::vector<std::vector<float>> kpss_list; 
 
+    std::cout << "fmc: " << fmc << std::endl; 
     for (uint32_t i = 0; i < _feat_stride_fpn.size(); ++i) { 
-      std::cout << "kk: " << _feat_stride_fpn[i] << std::endl; 
+
+      int stride = _feat_stride_fpn[i]; 
+
+      // Extract scores matrix ===============================
+      Ort::Value& first_output = net_outs[i];
+      Ort::TensorTypeAndShapeInfo shape_info = first_output.GetTensorTypeAndShapeInfo();
+      std::vector<int64_t> shape = shape_info.GetShape();
+      int scores_len = shape_info.GetElementCount();
+
+      // transfer the bbox_preds tensor to simple arrays 
+      float* scores = first_output.GetTensorMutableData<float>();
+      
+      int rows = static_cast<int>(shape[0]);
+      int cols = static_cast<int>(shape[1]);
+
+      std::cout << "stride: " << stride << std::endl; 
+      std::cout << "(Ar, c): " << "(" << rows << ", " << cols << ")" << std::endl; 
+
+      // Extract bbox_preds matrix ===============================
+      Ort::Value& second_output = net_outs[i+fmc];
+      shape_info = second_output.GetTensorTypeAndShapeInfo();
+      shape = shape_info.GetShape();
+      int bbox_preds_len = shape_info.GetElementCount();
+
+      // transfer the bbox_preds tensor to simple arrays 
+      float* bbox_preds = second_output.GetTensorMutableData<float>();
+      for (uint32_t s = 0; s < bbox_preds_len; ++s) {
+        bbox_preds[s] *= stride; 
+      }
+      
+      rows = static_cast<int>(shape[0]);
+      cols = static_cast<int>(shape[1]);
+
+      std::cout << "(Br, c): " << "(" << rows << ", " << cols << ")" << std::endl; 
+
+      // Extract kps_preds matrix ===============================
+      Ort::Value& third_output = net_outs[i+2*fmc];
+      shape_info = third_output.GetTensorTypeAndShapeInfo();
+      shape = shape_info.GetShape();
+      int kps_preds_len = shape_info.GetElementCount();
+
+      // transfer the bbox_preds tensor to simple arrays 
+      float* kps_preds = third_output.GetTensorMutableData<float>();
+
+      for (size_t s=0; s < kps_preds_len; ++s) {
+          kps_preds[s] *= stride;
+      }
+      
+      int kps_rows = static_cast<int>(shape[0]);
+      int kps_cols = static_cast<int>(shape[1]);
+
+      std::cout << "(Cr, c): " << "(" << rows << ", " << cols << ")" << std::endl; 
+      // =======================================================
+      int width = input_width / stride; 
+      int height = input_height / stride; 
+      int K = height * width; 
+      std::cout << "height: " << height << std::endl; 
+      std::cout << "input_height: " << input_height << std::endl; 
+      std::cout << "width: " << width << std::endl; 
+      std::cout << "input_width: " << input_width << std::endl; 
+      std::cout << "_num_anchors: " << _num_anchors << std::endl; 
+      std::cout << "K: " << K << std::endl; 
+      std::cout << "bbox_preds_len: " << bbox_preds_len << std::endl; 
+
+      float* anchor_centers_x; 
+      float* anchor_centers_y; 
+
+      create_anchor_centers(
+         /* float** anchor_centers_x */ &anchor_centers_x, 
+         /* float** anchor_centers_y */ &anchor_centers_y, 
+         /* int height               */ height, 
+         /* int width                */ width, 
+         /* int stride,              */ stride, 
+         /* int _num_anchors         */ _num_anchors
+      ); 
+
+//       vec::print(anchor_centers_x, height * width * _num_anchors);
+
+      std::vector<int> pos_inds = np_where(
+        /*float** data_in, */ scores, 
+        /*int size,        */ scores_len, 
+        /*float det_thresh */ det_thresh
+      ); 
+
+      std::vector<std::vector<float>> bboxes = distance2bbox(
+        /* float** anchor_centers_x, */ &anchor_centers_x, 
+        /* float** anchor_centers_y, */ &anchor_centers_y, 
+        /* float** bbox_preds        */ &bbox_preds, 
+        /* uint32_t size             */ height * width * _num_anchors
+      ); 
+
+      np_extract(
+        /* float* scores,            */ scores, 
+        /* std::vector<int> pos_inds */ pos_inds, 
+        /* std::vector<float>& out   */ scores_list
+      ); 
+
+      np_extract(
+        /* std::vector<std::vector<float>> bboxes, */ bboxes, 
+        /* std::vector<int> pos_inds               */ pos_inds, 
+        /* std::vector<std::vector<float>>& out    */ bboxes_list 
+      ); 
+
+      if (use_kps) { 
+        std::vector<std::vector<float>> kpss = distance2kps(
+          /* float** anchor_centers_x, */ &anchor_centers_x, 
+          /* float** anchor_centers_y, */ &anchor_centers_y, 
+          /* float** kps_preds         */ &kps_preds, 
+          /* uint32_t kps_rows         */ kps_rows, 
+          /* uint32_t kps_cols         */ kps_cols
+        ); 
+
+        np_extract(
+          /* std::vector<std::vector<float>> bboxes, */ kpss, 
+          /* std::vector<int> pos_inds               */ pos_inds, 
+          /* std::vector<std::vector<float>>& out    */ kpss_list
+        ); 
+
+      } // if (use_kps)
+
+      std::cout << "==========================" << std::endl;
     } 
 
 
+// scores = np.vstack(scores_list)
+// scores_ravel = scores.ravel()
+// print('scores_ravel: ', scores_ravel)
+// order = scores_ravel.argsort()[::-1]
+// print('order: ', order)
+// bboxes = np.vstack(bboxes_list) / det_scale
 
+    vec::print(bboxes_list, "bboxes_list"); 
+    std::vector<size_t> order = argsort(scores_list); 
+    vec::print(order, "order"); 
 
 
     return 0;

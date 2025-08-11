@@ -11,6 +11,7 @@ include_directories(${ONNXRUNTIME_DIR}/include)
 include_directories(${ONNXRUNTIME_DIR}/include/core/providers/cuda)
 #include_directories(${ONNXRUNTIME_DIR}/include/onnxruntime/core/session)
 link_directories(${ONNXRUNTIME_DIR}/lib)
+include_directories("/app/torcpp/include")
 
 # Find OpenCV
 find_package(OpenCV REQUIRED)
