@@ -94,8 +94,6 @@ void np_extract(
   } // iterate over i from 0 to pos_inds size
 } // std::vector<std::vector<float>> np_extract
 
-
-
 void np_extract(
   std::vector<std::vector<float>> bboxes, 
   std::vector<int> pos_inds, 
@@ -109,6 +107,30 @@ void np_extract(
   } // iterate over i from 0 to pos_inds size
 
 } // std::vector<std::vector<float>> np_extract
+
+void np_extract(
+  float* scores,
+  std::vector<std::vector<float>> bboxes, 
+  std::vector<int> pos_inds, 
+  std::vector<std::pair<float, std::vector<float>>>& out, 
+  float det_scale = 1.0                                   
+) { 
+
+  for (uint32_t i = 0; i < pos_inds.size(); ++i) { 
+    std::vector<float> bbox = bboxes[pos_inds[i]]; 
+    for (auto &x: bbox) { 
+      x /= det_scale;
+    } 
+    float score = scores[pos_inds[i]];
+    std::pair<float, std::vector<float>> temp = {score, bbox}; 
+    out.push_back(temp); 
+  } // iterate over i from 0 to pos_inds size
+
+} // std::vector<std::vector<float>> np_extract
+
+
+
+
 
 std::vector<std::vector<float>> distance2kps(
   float** anchor_centers_x, 
@@ -145,61 +167,69 @@ std::vector<size_t> argsort(const std::vector<float>& v) {
     return idx;
 }
 
-
-// Non-maximum suppression
-std::vector<int> nms(const cv::Mat& dets, float thresh) {
-    std::vector<float> x1, y1, x2, y2, scores;
-    for (int i = 0; i < dets.rows; ++i) {
-        x1.push_back(dets.at<float>(i, 0));
-        y1.push_back(dets.at<float>(i, 1));
-        x2.push_back(dets.at<float>(i, 2));
-        y2.push_back(dets.at<float>(i, 3));
-        scores.push_back(dets.at<float>(i, 4));
-    }
-
-    std::vector<float> areas;
-    for (size_t i = 0; i < x1.size(); ++i) {
-        areas.push_back((x2[i] - x1[i] + 1) * (y2[i] - y1[i] + 1));
-    }
-
-    std::vector<int> order(x1.size());
-    std::iota(order.begin(), order.end(), 0);
-    std::sort(order.begin(), order.end(), [&](int i, int j) { return scores[i] > scores[j]; });
-
-    std::vector<int> keep;
-    while (!order.empty()) {
-        int i = order[0];
-        keep.push_back(i);
-
-        std::vector<int> rem(order.begin() + 1, order.end());
-        std::vector<int> new_order;
-
-        for (int j : rem) {
-            float xx1 = std::max(x1[i], x1[j]);
-            float yy1 = std::max(y1[i], y1[j]);
-            float xx2 = std::min(x2[i], x2[j]);
-            float yy2 = std::min(y2[i], y2[j]);
-
-            float w = std::max(0.0f, xx2 - xx1 + 1);
-            float h = std::max(0.0f, yy2 - yy1 + 1);
-            float inter = w * h;
-            float ovr = inter / (areas[i] + areas[j] - inter);
-
-            if (ovr <= thresh) {
-                new_order.push_back(j);
-            }
-        }
-
-        order = new_order;
-    }
-
-    return keep;
+void argsort(std::vector<std::pair<float, std::vector<float>>>& data) {
+  std::sort(data.begin(), data.end(),
+     [](auto &a, auto &b) { return a.first > b.first; });
 }
 
 
+std::vector<uint32_t> nms(
+  std::vector<std::pair<float, std::vector<float>>> pre_det, 
+  float nms_thresh
+) { 
 
+  // create output vector 
+  std::vector<uint32_t> keep; 
 
+  std::vector<float> areas; 
+  for (uint32_t j = 0; j < pre_det.size(); ++j) { 
+    float x1 = pre_det[j].second[0]; 
+    float y1 = pre_det[j].second[1]; 
+    float x2 = pre_det[j].second[2]; 
+    float y2 = pre_det[j].second[3]; 
+    float temp = (x2-x1+1) * (y2-y1+1); 
+    areas.push_back(temp); 
+  } // iterate over j from 0 to size of pre_det
 
+  std::vector<uint32_t> order; 
+  std::vector<uint32_t> order_temp; 
+  for (uint32_t j = 0; j < pre_det.size(); ++j) { 
+    order.push_back(j); 
+  } // iterater over j from 0 to size of pre_det
+
+  while (order.size() > 0) { 
+
+    uint32_t i = order[0]; 
+    keep.push_back(i); 
+    float x1 = pre_det[i].second[0]; 
+    float y1 = pre_det[i].second[1]; 
+    float x2 = pre_det[i].second[2]; 
+    float y2 = pre_det[i].second[3]; 
+
+  //   printf("(x1, y1): (%f, %f)\n(x2, y2): (%f, %f)\n", x1, y1, x2, y2); 
+    order_temp.clear(); 
+    for (uint32_t j = 1; j < order.size(); ++j) { 
+      float xx1 = std::max(x1, pre_det[order[j]].second[0]); 
+      float yy1 = std::max(y1, pre_det[order[j]].second[1]); 
+      float xx2 = std::min(x2, pre_det[order[j]].second[2]); 
+      float yy2 = std::min(y2, pre_det[order[j]].second[3]); 
+
+      float w = std::max(static_cast<float>(0.0), xx2-xx1+1); 
+      float h = std::max(static_cast<float>(0.0), yy2-yy1+1); 
+
+      float inter = w * h;
+      float ovr = inter / (areas[i] + areas[order[j]] - inter); 
+
+      if (ovr <= nms_thresh) { 
+        order_temp.push_back(order[j]); 
+      } 
+
+    } // iterate over j from 0 to size of pre_det
+    order = order_temp; 
+  } // while (order.size() > 0) 
+
+  return keep; 
+} // void nms 
 
 
 int main() {
@@ -213,6 +243,7 @@ int main() {
     std::vector<int> _feat_stride_fpn = {8, 16, 32};
     int _num_anchors = 2;
     bool use_kps = true;
+    float nms_thresh = 0.4;
     float det_thresh = 0.5;
 
 
@@ -399,9 +430,9 @@ int main() {
 
     // create data for bbox_preds
     std::vector<int> sizes = {12800, 3200, 800}; 
-//     std::vector<std::vector<float>> scores_list;
     std::vector<float> scores_list;
     std::vector<std::vector<float>> bboxes_list; 
+    std::vector<std::pair<float, std::vector<float>>> pre_det;
     std::vector<std::vector<float>> kpss_list; 
 
     std::cout << "fmc: " << fmc << std::endl; 
@@ -497,16 +528,24 @@ int main() {
         /* uint32_t size             */ height * width * _num_anchors
       ); 
 
+//       np_extract(
+//         /* float* scores,            */ scores, 
+//         /* std::vector<int> pos_inds */ pos_inds, 
+//         /* std::vector<float>& out   */ scores_list
+//       ); 
+// 
+//       np_extract(
+//         /* std::vector<std::vector<float>> bboxes, */ bboxes, 
+//         /* std::vector<int> pos_inds               */ pos_inds, 
+//         /* std::vector<std::vector<float>>& out    */ bboxes_list 
+//       ); 
+// 
       np_extract(
-        /* float* scores,            */ scores, 
-        /* std::vector<int> pos_inds */ pos_inds, 
-        /* std::vector<float>& out   */ scores_list
-      ); 
-
-      np_extract(
-        /* std::vector<std::vector<float>> bboxes, */ bboxes, 
-        /* std::vector<int> pos_inds               */ pos_inds, 
-        /* std::vector<std::vector<float>>& out    */ bboxes_list 
+        /* float* scores,                                          */ scores, 
+        /* std::vector<std::vector<float>> bboxes,                 */ bboxes, 
+        /* std::vector<int> pos_inds,                              */ pos_inds, 
+        /* std::vector<std::pair<float, std::vector<float>>>& out, */ pre_det,
+        /* float det_scale = 1.0                                   */ det_scale 
       ); 
 
       if (use_kps) { 
@@ -529,17 +568,26 @@ int main() {
       std::cout << "==========================" << std::endl;
     } 
 
+    argsort(pre_det); 
 
-// scores = np.vstack(scores_list)
-// scores_ravel = scores.ravel()
-// print('scores_ravel: ', scores_ravel)
-// order = scores_ravel.argsort()[::-1]
-// print('order: ', order)
-// bboxes = np.vstack(bboxes_list) / det_scale
+    std::vector<uint32_t> keep = nms(
+      /* std::vector<std::pair<float, std::vector<float>>> pre_det */ pre_det, 
+      /* float nms_thresh                                          */ nms_thresh
+    ); 
 
-    vec::print(bboxes_list, "bboxes_list"); 
-    std::vector<size_t> order = argsort(scores_list); 
-    vec::print(order, "order"); 
+
+    vec::print(keep, "keep"); 
+
+    for (const auto x: pre_det) { 
+      printf("%f\t", x.first); 
+      vec::print(x.second); 
+
+    } // for loop over elements of pre_det
+
+
+
+
+
 
 
     return 0;

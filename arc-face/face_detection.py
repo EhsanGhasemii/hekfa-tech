@@ -100,7 +100,6 @@ def nms(dets, nms_thresh):
 
     keep = []
     while order.size > 0:
-        print('order: ', x1[order[1:]])
         i = order[0]
         keep.append(i)
         xx1 = np.maximum(x1[i], x1[order[1:]])
@@ -112,11 +111,9 @@ def nms(dets, nms_thresh):
         h = np.maximum(0.0, yy2 - yy1 + 1)
         inter = w * h
         ovr = inter / (areas[i] + areas[order[1:]] - inter)
-
+        
         inds = np.where(ovr <= thresh)[0]
         order = order[inds + 1]
-        print('inds: ', inds)
-        print('-' * 50)
 
     return keep
 
@@ -303,7 +300,7 @@ for idx, stride in enumerate(_feat_stride_fpn):
 scores = np.vstack(scores_list)
 scores_ravel = scores.ravel()
 order = scores_ravel.argsort()[::-1]
-
+# print('bboxes_list: ', bboxes_list)
 bboxes = np.vstack(bboxes_list) / det_scale
 if use_kps:
     kpss = np.vstack(kpss_list) / det_scale
@@ -311,6 +308,7 @@ pre_det = np.hstack((bboxes, scores)).astype(np.float32, copy=False)
 pre_det = pre_det[order, :]
 print('pre_det: ', pre_det)
 keep = nms(pre_det, nms_thresh)
+print('keep: ', keep)
 det = pre_det[keep, :]
 
 
