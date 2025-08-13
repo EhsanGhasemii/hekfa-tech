@@ -83,36 +83,11 @@ std::vector<std::vector<float>> distance2bbox(
 } // std::vector<std::vector<int>> distance2bbox 
 
 void np_extract(
-  float* scores, 
-  std::vector<int> pos_inds, 
-  std::vector<float>& out 
-) { 
-
-  for (uint32_t i = 0; i < pos_inds.size(); ++i) { 
-    float temp = scores[pos_inds[i]]; 
-    out.push_back(temp); 
-  } // iterate over i from 0 to pos_inds size
-} // std::vector<std::vector<float>> np_extract
-
-void np_extract(
-  std::vector<std::vector<float>> bboxes, 
-  std::vector<int> pos_inds, 
-  std::vector<std::vector<float>>& out, 
-  float det_scale = 1.0
-) { 
-
-  for (uint32_t i = 0; i < pos_inds.size(); ++i) { 
-    std::vector<float> temp = bboxes[pos_inds[i]]; 
-    out.push_back(temp); 
-  } // iterate over i from 0 to pos_inds size
-
-} // std::vector<std::vector<float>> np_extract
-
-void np_extract(
   float* scores,
   std::vector<std::vector<float>> bboxes, 
+  std::vector<std::vector<float>> kpss, 
   std::vector<int> pos_inds, 
-  std::vector<std::pair<float, std::vector<float>>>& out, 
+  std::vector<std::pair<float, std::pair<std::vector<float>, std::vector<float>>>>& out, 
   float det_scale = 1.0                                   
 ) { 
 
@@ -121,14 +96,34 @@ void np_extract(
     for (auto &x: bbox) { 
       x /= det_scale;
     } 
+    std::vector<float> kps = kpss[pos_inds[i]]; 
+    for (auto &x: kps) { 
+      x /= det_scale;
+    } 
     float score = scores[pos_inds[i]];
-    std::pair<float, std::vector<float>> temp = {score, bbox}; 
+    std::pair<std::vector<float>, std::vector<float>> data_temp = {bbox, kps}; 
+    std::pair<float, std::pair<std::vector<float>, std::vector<float>>> temp = {score, data_temp}; 
     out.push_back(temp); 
   } // iterate over i from 0 to pos_inds size
 
 } // std::vector<std::vector<float>> np_extract
 
 
+std::vector<std::pair<float, std::pair<std::vector<float>, std::vector<float>>>> np_extract(
+  std::vector<std::pair<float, std::pair<std::vector<float>, std::vector<float>>>>& data, 
+  std::vector<uint32_t> pos_inds 
+) { 
+
+  // create output vector
+  std::vector<std::pair<float, std::pair<std::vector<float>, std::vector<float>>>> out; 
+
+  for (uint32_t i = 0; i < pos_inds.size(); ++i) { 
+    std::pair<float, std::pair<std::vector<float>, std::vector<float>>> temp = data[pos_inds[i]]; 
+    out.push_back(temp); 
+  } // iterater over i from 0 to size of pos_inds
+
+  return out; 
+} // std::vector<std::vector<float>> np_extract
 
 
 
@@ -157,24 +152,13 @@ std::vector<std::vector<float>> distance2kps(
   return out; 
 } // std::vector<std::vector<float>> distance2kps 
 
-std::vector<size_t> argsort(const std::vector<float>& v) {
-    std::vector<size_t> idx(v.size());
-      for (size_t i = 0; i < idx.size(); i++) idx[i] = i;
-
-    sort(idx.begin(), idx.end(),
-         [&v](size_t i1, size_t i2) { return v[i1] > v[i2]; });
-
-    return idx;
-}
-
-void argsort(std::vector<std::pair<float, std::vector<float>>>& data) {
+void argsort(std::vector<std::pair<float, std::pair<std::vector<float>, std::vector<float>>>>& data) {
   std::sort(data.begin(), data.end(),
      [](auto &a, auto &b) { return a.first > b.first; });
 }
 
-
 std::vector<uint32_t> nms(
-  std::vector<std::pair<float, std::vector<float>>> pre_det, 
+  std::vector<std::pair<float, std::pair<std::vector<float>, std::vector<float>>>> pre_det, 
   float nms_thresh
 ) { 
 
@@ -183,10 +167,10 @@ std::vector<uint32_t> nms(
 
   std::vector<float> areas; 
   for (uint32_t j = 0; j < pre_det.size(); ++j) { 
-    float x1 = pre_det[j].second[0]; 
-    float y1 = pre_det[j].second[1]; 
-    float x2 = pre_det[j].second[2]; 
-    float y2 = pre_det[j].second[3]; 
+    float x1 = pre_det[j].second.first[0]; 
+    float y1 = pre_det[j].second.first[1]; 
+    float x2 = pre_det[j].second.first[2]; 
+    float y2 = pre_det[j].second.first[3]; 
     float temp = (x2-x1+1) * (y2-y1+1); 
     areas.push_back(temp); 
   } // iterate over j from 0 to size of pre_det
@@ -201,18 +185,18 @@ std::vector<uint32_t> nms(
 
     uint32_t i = order[0]; 
     keep.push_back(i); 
-    float x1 = pre_det[i].second[0]; 
-    float y1 = pre_det[i].second[1]; 
-    float x2 = pre_det[i].second[2]; 
-    float y2 = pre_det[i].second[3]; 
+    float x1 = pre_det[i].second.first[0]; 
+    float y1 = pre_det[i].second.first[1]; 
+    float x2 = pre_det[i].second.first[2]; 
+    float y2 = pre_det[i].second.first[3]; 
 
   //   printf("(x1, y1): (%f, %f)\n(x2, y2): (%f, %f)\n", x1, y1, x2, y2); 
     order_temp.clear(); 
     for (uint32_t j = 1; j < order.size(); ++j) { 
-      float xx1 = std::max(x1, pre_det[order[j]].second[0]); 
-      float yy1 = std::max(y1, pre_det[order[j]].second[1]); 
-      float xx2 = std::min(x2, pre_det[order[j]].second[2]); 
-      float yy2 = std::min(y2, pre_det[order[j]].second[3]); 
+      float xx1 = std::max(x1, pre_det[order[j]].second.first[0]); 
+      float yy1 = std::max(y1, pre_det[order[j]].second.first[1]); 
+      float xx2 = std::min(x2, pre_det[order[j]].second.first[2]); 
+      float yy2 = std::min(y2, pre_det[order[j]].second.first[3]); 
 
       float w = std::max(static_cast<float>(0.0), xx2-xx1+1); 
       float h = std::max(static_cast<float>(0.0), yy2-yy1+1); 
@@ -230,6 +214,10 @@ std::vector<uint32_t> nms(
 
   return keep; 
 } // void nms 
+
+
+
+
 
 
 int main() {
@@ -319,12 +307,6 @@ int main() {
     std::cout << "Detection image size: " << det_img.cols << "x" << det_img.rows << std::endl;
     std::cout << "Detection scale: " << det_scale << std::endl;
 
-    // Optional: Save or display det_img
-    // cv::imwrite("det_img.jpg", det_img);
-    // cv::imshow("Det Image", det_img);
-    // cv::waitKey(0);
-
-
     // 254: Get input size from det_img
     cv::Size bolb_input_size(det_img.cols, det_img.rows);  // reversed shape
 
@@ -395,14 +377,7 @@ int main() {
 
         // Assuming float output
         float* float_array = output_tensor.GetTensorMutableData<float>();
-
-//         std::cout << "Output " << i << " values:" << std::endl;
-//         for (size_t j = 0; j < total_len; ++j) {
-//             std::cout << float_array[j] << " ";
-//             if ((j + 1) % 10 == 0) std::cout << std::endl;
-//         }
-//         std::cout << std::endl;
-    }
+    } // iterater over i from 0 to size of net_outputs 
 
     std::map<std::tuple<int, int, int>, cv::Mat> center_cache;
 
@@ -420,9 +395,6 @@ int main() {
 
     // Print elements
     std::cout << "First Output Tensor (raw values):" << std::endl;
-//     for (int i = 0; i < total_len; ++i) {
-//         std::cout << data[i] << " ";
-//     }
     std::cout << "total len: " << total_len << std::endl; 
     std::cout << "rows: " << rows << std::endl; 
     std::cout << "cols: " << cols << std::endl; 
@@ -432,7 +404,7 @@ int main() {
     std::vector<int> sizes = {12800, 3200, 800}; 
     std::vector<float> scores_list;
     std::vector<std::vector<float>> bboxes_list; 
-    std::vector<std::pair<float, std::vector<float>>> pre_det;
+    std::vector<std::pair<float, std::pair<std::vector<float>, std::vector<float>>>> pre_det;
     std::vector<std::vector<float>> kpss_list; 
 
     std::cout << "fmc: " << fmc << std::endl; 
@@ -528,26 +500,6 @@ int main() {
         /* uint32_t size             */ height * width * _num_anchors
       ); 
 
-//       np_extract(
-//         /* float* scores,            */ scores, 
-//         /* std::vector<int> pos_inds */ pos_inds, 
-//         /* std::vector<float>& out   */ scores_list
-//       ); 
-// 
-//       np_extract(
-//         /* std::vector<std::vector<float>> bboxes, */ bboxes, 
-//         /* std::vector<int> pos_inds               */ pos_inds, 
-//         /* std::vector<std::vector<float>>& out    */ bboxes_list 
-//       ); 
-// 
-      np_extract(
-        /* float* scores,                                          */ scores, 
-        /* std::vector<std::vector<float>> bboxes,                 */ bboxes, 
-        /* std::vector<int> pos_inds,                              */ pos_inds, 
-        /* std::vector<std::pair<float, std::vector<float>>>& out, */ pre_det,
-        /* float det_scale = 1.0                                   */ det_scale 
-      ); 
-
       if (use_kps) { 
         std::vector<std::vector<float>> kpss = distance2kps(
           /* float** anchor_centers_x, */ &anchor_centers_x, 
@@ -558,9 +510,12 @@ int main() {
         ); 
 
         np_extract(
-          /* std::vector<std::vector<float>> bboxes, */ kpss, 
-          /* std::vector<int> pos_inds               */ pos_inds, 
-          /* std::vector<std::vector<float>>& out    */ kpss_list
+          /* float* scores,                                          */ scores, 
+          /* std::vector<std::vector<float>> bboxes,                 */ bboxes, 
+          /* std::vector<std::vector<float>> kpss,                   */ kpss, 
+          /* std::vector<int> pos_inds,                              */ pos_inds, 
+          /* std::vector<std::pair<float, std::vector<float>>>& out, */ pre_det,
+          /* float det_scale = 1.0                                   */ det_scale 
         ); 
 
       } // if (use_kps)
@@ -575,15 +530,18 @@ int main() {
       /* float nms_thresh                                          */ nms_thresh
     ); 
 
+    std::vector<std::pair<float, std::pair<std::vector<float>, std::vector<float>>>> det = np_extract(
+      /* std::vector<std::pair<float, std::vector<float>>>& out, */ pre_det,
+      /* std::vector<int> pos_inds,                              */ keep 
+    ); 
 
+    // print result
+    vec::draw_line(); 
     vec::print(keep, "keep"); 
-
-    for (const auto x: pre_det) { 
+    for (const auto x: det) { 
       printf("%f\t", x.first); 
-      vec::print(x.second); 
-
+      vec::print(x.second.second); 
     } // for loop over elements of pre_det
-
 
 
 

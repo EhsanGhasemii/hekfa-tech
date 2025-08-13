@@ -306,91 +306,82 @@ if use_kps:
     kpss = np.vstack(kpss_list) / det_scale
 pre_det = np.hstack((bboxes, scores)).astype(np.float32, copy=False)
 pre_det = pre_det[order, :]
-print('pre_det: ', pre_det)
 keep = nms(pre_det, nms_thresh)
-print('keep: ', keep)
 det = pre_det[keep, :]
 
 
 
 
+if use_kps:
+    kpss = kpss[order,:,:]
+    kpss = kpss[keep,:,:]
+else:
+    kpss = None
+if max_num > 0 and det.shape[0] > max_num:
+    area = (det[:, 2] - det[:, 0]) * (det[:, 3] -
+                                            det[:, 1])
+    img_center = img.shape[0] // 2, img.shape[1] // 2
+    offsets = np.vstack([
+        (det[:, 0] + det[:, 2]) / 2 - img_center[1],
+        (det[:, 1] + det[:, 3]) / 2 - img_center[0]
+    ])
+    offset_dist_squared = np.sum(np.power(offsets, 2.0), 0)
+    if metric=='max':
+        values = area
+    else:
+        values = area - offset_dist_squared * 2.0  # some extra weight on the centering
+    bindex = np.argsort(
+        values)[::-1]  # some extra weight on the centering
+    bindex = bindex[0:max_num]
+    det = det[bindex, :]
+    if kpss is not None:
+        kpss = kpss[bindex, :]
 
 
-# if use_kps:
-#     kpss = kpss[order,:,:]
-#     kpss = kpss[keep,:,:]
-# else:
-#     kpss = None
-# if max_num > 0 and det.shape[0] > max_num:
-#     area = (det[:, 2] - det[:, 0]) * (det[:, 3] -
-#                                             det[:, 1])
-#     img_center = img.shape[0] // 2, img.shape[1] // 2
-#     offsets = np.vstack([
-#         (det[:, 0] + det[:, 2]) / 2 - img_center[1],
-#         (det[:, 1] + det[:, 3]) / 2 - img_center[0]
-#     ])
-#     offset_dist_squared = np.sum(np.power(offsets, 2.0), 0)
-#     if metric=='max':
-#         values = area
-#     else:
-#         values = area - offset_dist_squared * 2.0  # some extra weight on the centering
-#     bindex = np.argsort(
-#         values)[::-1]  # some extra weight on the centering
-#     bindex = bindex[0:max_num]
-#     det = det[bindex, :]
-#     if kpss is not None:
-#         kpss = kpss[bindex, :]
-# 
-# 
-# # print('det: ', det)
-# # print('kpss: ', kpss)
-# # return det, kpss
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# # Arc-face Init
-# model_file = recognition_model_path
-# taskname = 'recognition'
-# find_sub = False
-# find_mul = False
-# model = onnx.load(model_file)
-# graph = model.graph
-# for nid, node in enumerate(graph.node[:8]):
-#     #print(nid, node.name)
-#     if node.name.startswith('Sub') or node.name.startswith('_minus'):
-#         find_sub = True
-#     if node.name.startswith('Mul') or node.name.startswith('_mul'):
-#         find_mul = True
-# if find_sub and find_mul:
-#     #mxnet arcface model
-#     input_mean = 0.0
-#     input_std = 1.0
-# else:
-#     input_mean = 127.5
-#     input_std = 127.5
-# session = onnxruntime.InferenceSession(model_file, None)
-# input_cfg = session.get_inputs()[0]
-# input_shape = input_cfg.shape
-# input_name = input_cfg.name
-# input_size = tuple(input_shape[2:4][::-1])
-# outputs = session.get_outputs()
-# output_names = []
-# for out in outputs:
-#     output_names.append(out.name)
-# output_shape = outputs[0].shape
-# 
-# 
-# 
-# 
+# print('keep: ', keep)
+# print('det: ', det)
+# print('kpss: ', kpss)
+# return det, kpss
+
+
+
+
+# Arc-face Init
+
+recognition_model_path = "/root/.insightface/models/buffalo_l/w600k_r50.onnx"
+model_file = recognition_model_path
+taskname = 'recognition'
+find_sub = False
+find_mul = False
+model = onnx.load(model_file)
+graph = model.graph
+for nid, node in enumerate(graph.node[:8]):
+    #print(nid, node.name)
+    if node.name.startswith('Sub') or node.name.startswith('_minus'):
+        find_sub = True
+    if node.name.startswith('Mul') or node.name.startswith('_mul'):
+        find_mul = True
+if find_sub and find_mul:
+    #mxnet arcface model
+    input_mean = 0.0
+    input_std = 1.0
+else:
+    input_mean = 127.5
+    input_std = 127.5
+session = onnxruntime.InferenceSession(model_file, None)
+input_cfg = session.get_inputs()[0]
+input_shape = input_cfg.shape
+input_name = input_cfg.name
+input_size = tuple(input_shape[2:4][::-1])
+outputs = session.get_outputs()
+output_names = []
+for out in outputs:
+    output_names.append(out.name)
+output_shape = outputs[0].shape
+
+
+
+
 # # Arc-face prepare
 # if ctx_id<0:
 #     session.set_providers(['CPUExecutionProvider'])
