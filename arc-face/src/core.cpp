@@ -545,6 +545,123 @@ int main() {
 
 
 
+    // =======================================================================
+// 
+// struct Face {
+//     cv::Rect bbox;
+//     std::vector<cv::Point2f> kps;
+//     float det_score;
+//     cv::Mat embedding;
+// };
+// 
+// // Placeholder for norm_crop
+// cv::Mat norm_crop(const cv::Mat& img, const std::vector<cv::Point2f>& landmark, int image_size) {
+//     // TODO: implement proper ArcFace norm_crop (affine transform based on landmarks)
+//     // For now, just return resized region of interest
+//     return img.clone();
+// }
+
+    std::string model_file = "/root/.insightface/models/buffalo_l/w600k_r50.onnx";
+    input_mean = 127.5f;
+    input_std  = 127.5f;
+
+    // ==== Load ONNX Runtime session2 ====
+    Ort::Env env2(ORT_LOGGING_LEVEL_WARNING, "arcface");
+    Ort::SessionOptions session_options2;
+    session_options2.SetIntraOpNumThreads(1);
+
+    Ort::Session session2(env2, model_file.c_str(), session_options2);
+
+    // ==== Get input info ====
+    Ort::AllocatorWithDefaultOptions allocator2;
+    auto input_name_c = session.GetInputNameAllocated(0, allocator);
+    std::string input_name2 = input_name_c.get();
+    std::cout << "input_name2: " << input_name2 << std::endl;
+
+    Ort::TypeInfo input_type_info = session2.GetInputTypeInfo(0);
+    auto tensor_info = input_type_info.GetTensorTypeAndShapeInfo();
+    std::vector<int64_t> input_shape = tensor_info.GetShape();
+    cv::Size input_size2((int)input_shape[3], (int)input_shape[2]); // width, height
+
+    // ==== Get output info ====
+    size_t num_outputs2 = session2.GetOutputCount();
+    std::cout << "Number of outputs: " << num_outputs2 << std::endl;
+    std::vector<std::string> output_names2;
+    for (size_t i = 0; i < num_outputs2; ++i) {
+        auto output_name_ptr = session.GetOutputNameAllocated(i, allocator);
+        std::string output_name = output_name_ptr.get();
+        output_names2.emplace_back(output_name);
+        std::cout << "Output " << i << " name: " << output_name << std::endl;
+    }
+
+    // ==== ArcFace processing example ====
+//     cv::Mat img = cv::imread("face.jpg"); // example image
+//     cv::Mat det;   // TODO: detection results (Nx5: x1,y1,x2,y2,score)
+//     cv::Mat kpss;  // TODO: keypoints results (Nx5x2)
+// 
+//     std::vector<Face> ret;
+// 
+//     for (int i = 0; i < det.rows; i++) {
+//         cv::Rect bbox(
+//             cv::Point((int)det.at<float>(i,0), (int)det.at<float>(i,1)),
+//             cv::Point((int)det.at<float>(i,2), (int)det.at<float>(i,3))
+//         );
+//         float det_score = det.at<float>(i,4);
+// 
+//         std::vector<cv::Point2f> kps;
+//         if (!kpss.empty()) {
+//             for (int k = 0; k < kpss.cols / 2; k++) {
+//                 kps.emplace_back(kpss.at<float>(i, 2*k), kpss.at<float>(i, 2*k + 1));
+//             }
+//         }
+// 
+//         Face face { bbox, kps, det_score };
+// 
+//         // Crop & align face
+//         cv::Mat aimg = norm_crop(img, face.kps, input_size2.width);
+// 
+//         // Prepare blob
+//         cv::Mat blob = cv::dnn::blobFromImages(
+//             {aimg},                      // images
+//             1.0 / input_std,              // scalefactor
+//             input_size2,                   // size
+//             cv::Scalar(input_mean, input_mean, input_mean), // mean
+//             true                          // swapRB
+//         );
+// 
+//         // Create input tensor for ONNX Runtime
+//         std::vector<int64_t> blob_shape = { 1, blob.size[1], blob.size[2], blob.size[3] };
+//         size_t tensor_size = blob.total();
+//         Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
+//             allocator2, (float*)blob.data, tensor_size, blob_shape.data(), blob_shape.size()
+//         );
+// 
+//         // Run inference
+//         std::vector<const char*> output_names_c;
+//         for (auto &s : output_names2) output_names_c.push_back(s.c_str());
+// 
+//         auto output_tensors = session2.Run(
+//             Ort::RunOptions{nullptr},
+//             &input_name2, &input_tensor, 1,
+//             output_names_c.data(), output_names_c.size()
+//         );
+// 
+//         // Get embedding
+//         float* embedding_data = output_tensors.front().GetTensorMutableData<float>();
+//         auto out_info = output_tensors.front().GetTensorTypeAndShapeInfo();
+//         std::vector<int64_t> out_shape = out_info.GetShape();
+// 
+//         face.embedding = cv::Mat(1, out_shape[1], CV_32F, embedding_data).clone();
+//         ret.push_back(face);
+//     }
+// 
+//     std::cout<< "Processed " << ret.size() << " faces.\n";
+// 
+
+    // =======================================================================
+
+
+
 
 
 

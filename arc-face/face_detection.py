@@ -368,6 +368,11 @@ if find_sub and find_mul:
 else:
     input_mean = 127.5
     input_std = 127.5
+
+find_sub = False
+find_mul = False
+input_mean = 127.5
+input_mean = 127.5
 session = onnxruntime.InferenceSession(model_file, None)
 input_cfg = session.get_inputs()[0]
 input_shape = input_cfg.shape
@@ -380,51 +385,33 @@ for out in outputs:
 output_shape = outputs[0].shape
 
 
+# Arc-face prepare
+if ctx_id<0:
+    session.set_providers(['CPUExecutionProvider'])
 
+ret = []
+for i in range(det.shape[0]):
+    bbox = det[i, 0:4]
+    det_score = det[i, 4]
+    kps = None
+    if kpss is not None:
+        kps = kpss[i]
 
-# # Arc-face prepare
-# if ctx_id<0:
-#     session.set_providers(['CPUExecutionProvider'])
-# 
-# 
-# 
-# ret = []
-# for i in range(det.shape[0]):
-#     bbox = det[i, 0:4]
-#     det_score = det[i, 4]
-#     kps = None
-#     if kpss is not None:
-#         kps = kpss[i]
-# 
-#     face = {'bbox':bbox, 'kps':kps, 'det_score':det_score}
-# 
-# 
-#     # Arc-face get
-#     aimg = norm_crop(img, landmark=face['kps'], image_size=input_size[0])
-# #     face.embedding = self.get_feat(aimg).flatten()
-# #     return face.embedding
-# 
-#     # Arc-face get-feat
-#     if not isinstance(aimg, list):
-#         aimg = [aimg]
-#     
-#     blob = cv2.dnn.blobFromImages(aimg, 1.0 / input_std, input_size,
-#                                   (input_mean, input_mean, input_mean), swapRB=True)
-#     face['embedding'] = session.run(output_names, {input_name: blob})[0]
-#     ret.append(face)
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
+    face = {'bbox':bbox, 'kps':kps, 'det_score':det_score}
 
+    # Arc-face get
+    aimg = norm_crop(img, landmark=face['kps'], image_size=input_size[0])
+#     face.embedding = self.get_feat(aimg).flatten()
+#     return face.embedding
 
-
-
-
+    # Arc-face get-feat
+    if not isinstance(aimg, list):
+        aimg = [aimg]
+    
+    blob = cv2.dnn.blobFromImages(aimg, 1.0 / input_std, input_size,
+                                  (input_mean, input_mean, input_mean), swapRB=True)
+    face['embedding'] = session.run(output_names, {input_name: blob})[0]
+    ret.append(face)
 
 
 
