@@ -49,11 +49,18 @@ def estimate_norm(lmk, image_size=112,mode='arcface'):
     else:
         ratio = float(image_size)/128.0
         diff_x = 8.0*ratio
+
     dst = arcface_dst * ratio
     dst[:,0] += diff_x
+    
     tform = trans.SimilarityTransform()
     tform.estimate(lmk, dst)
+    print('lmk: ', lmk)
+    print('dst: ', dst)
+#     print('dst: ', dst)
+#     print('tform: ', tform)
     M = tform.params[0:2, :]
+    print('M: ', M)
     return M
 
 def norm_crop(img, landmark, image_size=112, mode='arcface'):
@@ -390,6 +397,7 @@ if ctx_id<0:
     session.set_providers(['CPUExecutionProvider'])
 
 ret = []
+print('det: ', det)
 for i in range(det.shape[0]):
     bbox = det[i, 0:4]
     det_score = det[i, 4]
@@ -411,10 +419,16 @@ for i in range(det.shape[0]):
     blob = cv2.dnn.blobFromImages(aimg, 1.0 / input_std, input_size,
                                   (input_mean, input_mean, input_mean), swapRB=True)
     face['embedding'] = session.run(output_names, {input_name: blob})[0]
+
+    print('embedding: ', face['embedding'])
+    print('embedding: ', face['embedding'].shape)
+
+
+
     ret.append(face)
 
 
-
+    print('-' * 50)
 
 
 
