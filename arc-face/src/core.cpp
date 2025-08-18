@@ -224,8 +224,127 @@ cv::Mat arcface_dst = (cv::Mat_<float>(5, 2) <<
     70.7299f, 92.2041f
 );
 
-int main() {
-    const std::string detection_model_path = "/root/.insightface/models/buffalo_l/det_10g.onnx";
+// function to check input file is an image or not
+bool isImage(const std::string& filename) {
+    std::string ext;
+    size_t pos = filename.find_last_of(".");
+    if (pos != std::string::npos) {
+        ext = filename.substr(pos + 1);
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    }
+
+    return (ext == "jpg" || ext == "jpeg" || ext == "png" || 
+            ext == "bmp" || ext == "tiff" || ext == "gif");
+}
+
+// function to check input file is a video or not
+bool isVideo(const std::string& filename) {
+    std::string ext;
+    size_t pos = filename.find_last_of(".");
+    if (pos != std::string::npos) {
+        ext = filename.substr(pos + 1);
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    }
+
+    return (ext == "mp4" || ext == "avi" || ext == "mkv" || 
+            ext == "mov" || ext == "flv" || ext == "wmv");
+}
+
+// Create ModelHandler
+struct ModelHandler { 
+  Ort::Env env;
+  Ort::SessionOptions session_options;   
+  Ort::Session session;
+  std::string input_name;
+  std::vector<std::string> output_names;
+
+  ModelHandler(
+    const std::string& model_path, 
+    const std::string& name="onnx_model"
+  )
+    : env(ORT_LOGGING_LEVEL_WARNING, name.c_str()),
+      session_options(), 
+      session(env, model_path.c_str(), session_options)
+  {
+    Ort::AllocatorWithDefaultOptions allocator;
+
+    // Inputs
+    size_t num_inputs = session.GetInputCount();
+    std::cout << "Number of inputs: " << num_inputs << std::endl;
+    auto input_name_ptr = session.GetInputNameAllocated(0, allocator);
+    input_name = input_name_ptr.get();
+    std::cout << "Input name: " << input_name << std::endl;
+
+    // Outputs
+    size_t num_outputs = session.GetOutputCount();
+    std::cout << "Number of outputs: " << num_outputs << std::endl;
+
+    for (size_t i = 0; i < num_outputs; ++i) {
+        auto output_name_ptr = session.GetOutputNameAllocated(i, allocator);
+        std::string output_name = output_name_ptr.get();
+        output_names.emplace_back(output_name);
+        std::cout << "Output " << i << " name: " << output_name << std::endl;
+    }
+
+    std::cout << "MMMMMOOOOOOOOOOO" << std::endl; 
+    std::cout << "kkkkkkkk: " << name << std::endl; 
+
+  } // ModelHandler
+
+  std::vector<Ort::Value> run(
+    const cv::Mat& blob, 
+    const size_t& input_tensor_size, 
+    const std::vector<int64_t>& input_tensor_shape
+  ) { 
+
+    Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+    Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
+        memory_info,
+        reinterpret_cast<float*>(blob.data),
+        input_tensor_size,
+        input_tensor_shape.data(),
+        input_tensor_shape.size()
+    );
+
+    const char* in_name[] = { input_name.c_str() };   // one input name
+    std::vector<const char*> out_names;
+
+    for (const auto& name : output_names) {
+        out_names.push_back(name.c_str());  // Convert std::string to const char*
+    }
+
+    // 256: Run detection_session
+    auto net_outs = session.Run(
+        Ort::RunOptions{nullptr},
+        in_name,
+        &input_tensor,
+        1,
+        out_names.data(),
+        out_names.size()
+    );
+
+    return net_outs;
+  } // void run 
+
+
+}; // struct ModelHandler
+
+// Create FaceApp
+struct FaceApp { 
+  ModelHandler detection_model; 
+  ModelHandler recognition_model; 
+
+  FaceApp(
+    const std::string& detection_model_path, 
+    const std::string& recognition_model_path
+  )
+    : detection_model(detection_model_path, "Detection"),
+      recognition_model(recognition_model_path, "Recognition")
+  {}
+
+  void getEmbeddings(
+    const cv::Mat& img
+  ) { 
 
     // Assumptions from earlier context
     float input_mean = 127.5f;
@@ -237,39 +356,6 @@ int main() {
     bool use_kps = true;
     float nms_thresh = 0.4;
     float det_thresh = 0.5;
-
-
-    Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "Detection");
-    Ort::SessionOptions session_options;
-    Ort::Session session(env, detection_model_path.c_str(), session_options);
-
-    Ort::AllocatorWithDefaultOptions allocator;
-
-    // Inputs
-    size_t num_inputs = session.GetInputCount();
-    std::cout << "Number of inputs: " << num_inputs << std::endl;
-    auto input_name_ptr = session.GetInputNameAllocated(0, allocator);
-    std::string input_name = input_name_ptr.get();
-    std::cout << "Input name: " << input_name << std::endl;
-
-    // Outputs
-    size_t num_outputs = session.GetOutputCount();
-    std::cout << "Number of outputs: " << num_outputs << std::endl;
-
-    std::vector<std::string> output_names;
-    for (size_t i = 0; i < num_outputs; ++i) {
-        auto output_name_ptr = session.GetOutputNameAllocated(i, allocator);
-        std::string output_name = output_name_ptr.get();
-        output_names.emplace_back(output_name);
-        std::cout << "Output " << i << " name: " << output_name << std::endl;
-    }
-
-    // Load image
-    cv::Mat img = cv::imread("persons.jpg");
-    if (img.empty()) {
-        std::cerr << "Error loading image!" << std::endl;
-        return -1;
-    }
 
     // Assuming input_size is std::pair<int, int> as (width, height)
     std::pair<int64_t, int64_t> input_size = {640, 640};  // example, replace with your actual input size
@@ -333,30 +419,11 @@ int main() {
     size_t input_tensor_size = 1;
     for (auto dim : input_tensor_shape) input_tensor_size *= dim;
 
-    Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-    Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
-        memory_info,
-        reinterpret_cast<float*>(blob.data),
-        input_tensor_size,
-        input_tensor_shape.data(),
-        input_tensor_shape.size()
-    );
-
-    const char* in_name = input_name.c_str();  // Use actual input name
-    std::vector<const char*> out_names;
-    for (const auto& name : output_names) {
-        out_names.push_back(name.c_str());  // Convert std::string to const char*
-    }
-
-    // 256: Run session
-    auto net_outs = session.Run(
-        Ort::RunOptions{nullptr},
-        &in_name,
-        &input_tensor,
-        1,
-        out_names.data(),
-        out_names.size()
-    );
+    auto net_outs = detection_model.run(
+      /*const cv::Mat& blob,                           */ blob, 
+      /*const size_t& input_tensor_size,               */ input_tensor_size, 
+      /*const std::vector<int64_t>& input_tensor_shape */ input_tensor_shape
+    ); 
 
     // print output of the model
     for (size_t i = 0; i < net_outs.size(); ++i) {
@@ -379,30 +446,20 @@ int main() {
         }
         std::cout << "]" << std::endl;
 
+//         if (i == 2) { 
+//           const float* data = output_tensor.GetTensorData<float>();
+// 
+//           std::cout << "Values: ";
+//           for (size_t i = 0; i < total_len; i++) {
+//               std::cout << data[i];
+//               if (i < total_len - 1) std::cout << ", ";
+//           }
+//         } 
+// 
+
         // Assuming float output
         float* float_array = output_tensor.GetTensorMutableData<float>();
     } // iterater over i from 0 to size of net_outputs 
-
-    std::map<std::tuple<int, int, int>, cv::Mat> center_cache;
-
-    Ort::Value& first_output = net_outs[3];
-    Ort::TensorTypeAndShapeInfo shape_info = first_output.GetTensorTypeAndShapeInfo();
-    std::vector<int64_t> shape = shape_info.GetShape();
-    int total_len = shape_info.GetElementCount();
-
-    
-    int rows = static_cast<int>(shape[0]);
-    int cols = static_cast<int>(shape[1]);
-
-    // Extract raw data
-    float* data = first_output.GetTensorMutableData<float>();
-
-    // Print elements
-    std::cout << "First Output Tensor (raw values):" << std::endl;
-    std::cout << "total len: " << total_len << std::endl; 
-    std::cout << "rows: " << rows << std::endl; 
-    std::cout << "cols: " << cols << std::endl; 
-    std::cout << std::endl;
 
     // create data for bbox_preds
     std::vector<int> sizes = {12800, 3200, 800}; 
@@ -525,7 +582,7 @@ int main() {
       } // if (use_kps)
 
       std::cout << "==========================" << std::endl;
-    } 
+    } // for i from 0 to _feat_stride_fpn size
 
     argsort(pre_det); 
 
@@ -549,52 +606,16 @@ int main() {
 
 
 
-    // =======================================================================
-
-    std::string model_file = "/root/.insightface/models/buffalo_l/w600k_r50.onnx";
+    // ====================================================================
     input_mean = 127.5f;
     input_std  = 127.5f;
 
-    // ==== Load ONNX Runtime session2 ====
-    Ort::Env env2(ORT_LOGGING_LEVEL_WARNING, "arcface");
-    Ort::SessionOptions session_options2;
-    session_options2.SetIntraOpNumThreads(1);
-
-    Ort::Session session2(env2, model_file.c_str(), session_options2);
-
-    // ==== Get input info ====
-    Ort::AllocatorWithDefaultOptions allocator2;
-    auto input_name_c = session2.GetInputNameAllocated(0, allocator2);
-    std::string input_name2 = input_name_c.get();
-    std::cout << "input_name2: " << input_name2 << std::endl;
-
-    // store in const char* array for Run
-    const char* input_names2[] = { input_name2.c_str() };
-
-    Ort::TypeInfo input_type_info = session2.GetInputTypeInfo(0);
+    Ort::TypeInfo input_type_info = recognition_model.session.GetInputTypeInfo(0);
     auto tensor_info = input_type_info.GetTensorTypeAndShapeInfo();
     std::vector<int64_t> input_shape = tensor_info.GetShape();
     cv::Size input_size2((int)input_shape[3], (int)input_shape[2]); // width, height
 
-    // ==== Get output info ====
-    size_t num_outputs2 = session2.GetOutputCount();
-    std::cout << "Number of outputs: " << num_outputs2 << std::endl;
-    std::vector<std::string> output_names2;
-    std::vector<const char*> output_names2_cstr; // store const char* for Run
 
-    for (size_t i = 0; i < num_outputs2; ++i) {
-        auto output_name_ptr = session2.GetOutputNameAllocated(i, allocator2);
-        std::string output_name = output_name_ptr.get();
-        output_names2.emplace_back(output_name);
-        output_names2_cstr.push_back(output_names2.back().c_str()); // keep pointer valid
-        std::cout << "Output " << i << " name: " << output_name << std::endl;
-    }
-
-
-
-
-    vec::draw_line(5); 
-    std::cout << "input_size: " << input_size2.width << std::endl; 
     for (const auto x: det) { 
       std::vector<float> kps = x.second.second; 
 
@@ -621,11 +642,11 @@ int main() {
       }
       std::cout << "dst: " << dst << std::endl; 
 
-//       cv::Mat M = cv::estimateAffinePartial2D(kps_mat, dst);
-      cv::Mat M = (cv::Mat_<float>(2, 3) <<
-          0.39182017f, 0.34702577f, -227.6744765f, 
-          -0.34702577f, 0.39182017f, 192.44877767f
-      );
+      cv::Mat M = cv::estimateAffinePartial2D(kps_mat, dst);
+//       cv::Mat M = (cv::Mat_<float>(2, 3) <<
+//           0.39182017f, 0.34702577f, -227.6744765f, 
+//           -0.34702577f, 0.39182017f, 192.44877767f
+//       );
       std::cout << "M: " << M << std::endl; 
 
 
@@ -650,27 +671,12 @@ int main() {
     );
 
     std::vector<int64_t> input_shape = {1, blob.size[1], blob.size[2], blob.size[3]}; 
-
-    Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(
-        OrtDeviceAllocator, OrtMemTypeCPU);
-
-    Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
-        memory_info,
-        (float*)blob.data,
-        blob.total(),
-        input_shape.data(),
-        input_shape.size()
-    );
-
-//     // 3. Run inference
-    auto output_tensors = session2.Run(
-        Ort::RunOptions{nullptr},
-        input_names2,                               // const char* const*
-        &input_tensor,                              // pointer to input tensor
-        1,                                          // number of inputs
-        output_names2_cstr.data(),                  // const char* const*
-        output_names2_cstr.size()                   // number of outputs
-    );
+ 
+    auto output_tensors = recognition_model.run(
+      /*const cv::Mat& blob,                           */ blob, 
+      /*const size_t& input_tensor_size,               */ blob.total(), 
+      /*const std::vector<int64_t>& input_tensor_shape */ input_shape
+    ); 
 
     // 4. Get the embedding result
     float* embedding_data = output_tensors.front().GetTensorMutableData<float>();
@@ -679,13 +685,58 @@ int main() {
     size_t embedding_size = output_tensors.front().GetTensorTypeAndShapeInfo().GetElementCount();
     std::vector<float> embedding(embedding_data, embedding_data + embedding_size);
 
-    vec::print(embedding, "embedding", 8, true);
+    vec::print(embedding, "embedding", 8, false);
     std::cout << "embedding shape: " << embedding.size() << std::endl; 
 
 
       vec::draw_line(40, '-'); 
     } // for (const auto x: det)
 
+  } // void getEmbeddings
+
+}; // struce FaceApp
+
+
+int main(int argc, char* argv[]) {
+
+    if (argc < 2) { 
+      std::cerr << "Usage: " << argv[0] << " <input_file>\n"; 
+      return 1; 
+    } // if (argc < 2)
+
+    // extract image file name
+    std::string input_file = argv[1]; 
+
+    // Create requirement models
+    const std::string detection_model_path = "/root/.insightface/models/buffalo_l/det_10g.onnx";
+    const std::string recognition_model_path = "/root/.insightface/models/buffalo_l/w600k_r50.onnx";
+
+    FaceApp face_app(detection_model_path, recognition_model_path); 
+
+//     if (isImage(input_file)) { 
+//       std::cout << "the file is an image." << std::endl; 
+//       return 1; 
+//     } // if (isImage(input_file))
+// 
+//     else if (isVideo(input_file)) { 
+//       std::cout << "The input file is a video." << std::endl; 
+//       return 1; 
+//     } // else if (isVideo(input_file))
+// 
+//     else {
+//       std::cout << "Unknown or unsupported file format: " << input_file << std::endl; 
+//       return 1; 
+//     } // else after detecting image or video
+
+
+    // Load image
+    cv::Mat img = cv::imread(input_file);
+    if (img.empty()) {
+        std::cerr << "Error loading image!" << std::endl;
+        return -1;
+    }
+
+    face_app.getEmbeddings(img); 
 
 
     return 0;
