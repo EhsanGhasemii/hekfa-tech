@@ -233,8 +233,9 @@ bool isImage(const std::string& filename) {
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
     }
 
-    return (ext == "jpg" || ext == "jpeg" || ext == "png" || 
-            ext == "bmp" || ext == "tiff" || ext == "gif");
+    return (ext == "jpg"   || ext == "jpeg" || ext == "png" || 
+            ext == "bmp"   || ext == "tiff" || ext == "gif" ||
+            ext == "pjpeg" || ext == "webp");
 }
 
 // function to check input file is a video or not
@@ -268,6 +269,9 @@ struct ModelHandler {
   {
     Ort::AllocatorWithDefaultOptions allocator;
 
+    // model name
+    std::cout << name << " model has been initiallized." << std::endl; 
+
     // Inputs
     size_t num_inputs = session.GetInputCount();
     std::cout << "Number of inputs: " << num_inputs << std::endl;
@@ -285,9 +289,6 @@ struct ModelHandler {
         output_names.emplace_back(output_name);
         std::cout << "Output " << i << " name: " << output_name << std::endl;
     }
-
-    std::cout << "MMMMMOOOOOOOOOOO" << std::endl; 
-    std::cout << "kkkkkkkk: " << name << std::endl; 
 
   } // ModelHandler
 
@@ -342,7 +343,7 @@ struct FaceApp {
       recognition_model(recognition_model_path, "Recognition")
   {}
 
-  void getEmbeddings(
+  std::vector<std::vector<float>> getEmbeddings(
     const cv::Mat& img
   ) { 
 
@@ -386,17 +387,6 @@ struct FaceApp {
     // Copy resized image to the top-left corner of det_img
     resized_img.copyTo(det_img(cv::Rect(0, 0, new_width, new_height)));
 
-    // For demonstration:
-    printf("new_height: %d\n", new_height); 
-    printf("new_width: %d\n", new_width);
-    printf("im_ratio: %.8f\n", im_ratio); 
-    printf("model_ratio: %.8f\n", model_ratio);
-
-    std::cout << "Original image size: " << img.cols << "x" << img.rows << std::endl;
-    std::cout << "Resized image size: " << new_width << "x" << new_height << std::endl;
-    std::cout << "Detection image size: " << det_img.cols << "x" << det_img.rows << std::endl;
-    std::cout << "Detection scale: " << det_scale << std::endl;
-
     // 254: Get input size from det_img
     cv::Size bolb_input_size(det_img.cols, det_img.rows);  // reversed shape
 
@@ -425,42 +415,6 @@ struct FaceApp {
       /*const std::vector<int64_t>& input_tensor_shape */ input_tensor_shape
     ); 
 
-    // print output of the model
-    for (size_t i = 0; i < net_outs.size(); ++i) {
-        Ort::Value& output_tensor = net_outs[i];
-
-        if (!output_tensor.IsTensor()) {
-            std::cout << "Output " << i << " is not a tensor." << std::endl;
-            continue;
-        }
-
-        // Get shape
-        Ort::TensorTypeAndShapeInfo shape_info = output_tensor.GetTensorTypeAndShapeInfo();
-        std::vector<int64_t> shape = shape_info.GetShape();
-        size_t total_len = shape_info.GetElementCount();
-
-        std::cout << "Output " << i << " shape: [";
-        for (size_t j = 0; j < shape.size(); ++j) {
-            std::cout << shape[j];
-            if (j < shape.size() - 1) std::cout << ", ";
-        }
-        std::cout << "]" << std::endl;
-
-//         if (i == 2) { 
-//           const float* data = output_tensor.GetTensorData<float>();
-// 
-//           std::cout << "Values: ";
-//           for (size_t i = 0; i < total_len; i++) {
-//               std::cout << data[i];
-//               if (i < total_len - 1) std::cout << ", ";
-//           }
-//         } 
-// 
-
-        // Assuming float output
-        float* float_array = output_tensor.GetTensorMutableData<float>();
-    } // iterater over i from 0 to size of net_outputs 
-
     // create data for bbox_preds
     std::vector<int> sizes = {12800, 3200, 800}; 
     std::vector<float> scores_list;
@@ -468,7 +422,6 @@ struct FaceApp {
     std::vector<std::pair<float, std::pair<std::vector<float>, std::vector<float>>>> pre_det;
     std::vector<std::vector<float>> kpss_list; 
 
-    std::cout << "fmc: " << fmc << std::endl; 
     for (uint32_t i = 0; i < _feat_stride_fpn.size(); ++i) { 
 
       int stride = _feat_stride_fpn[i]; 
@@ -485,9 +438,6 @@ struct FaceApp {
       int rows = static_cast<int>(shape[0]);
       int cols = static_cast<int>(shape[1]);
 
-      std::cout << "stride: " << stride << std::endl; 
-      std::cout << "(Ar, c): " << "(" << rows << ", " << cols << ")" << std::endl; 
-
       // Extract bbox_preds matrix ===============================
       Ort::Value& second_output = net_outs[i+fmc];
       shape_info = second_output.GetTensorTypeAndShapeInfo();
@@ -502,8 +452,6 @@ struct FaceApp {
       
       rows = static_cast<int>(shape[0]);
       cols = static_cast<int>(shape[1]);
-
-      std::cout << "(Br, c): " << "(" << rows << ", " << cols << ")" << std::endl; 
 
       // Extract kps_preds matrix ===============================
       Ort::Value& third_output = net_outs[i+2*fmc];
@@ -521,18 +469,10 @@ struct FaceApp {
       int kps_rows = static_cast<int>(shape[0]);
       int kps_cols = static_cast<int>(shape[1]);
 
-      std::cout << "(Cr, c): " << "(" << rows << ", " << cols << ")" << std::endl; 
       // =======================================================
       int width = input_width / stride; 
       int height = input_height / stride; 
       int K = height * width; 
-      std::cout << "height: " << height << std::endl; 
-      std::cout << "input_height: " << input_height << std::endl; 
-      std::cout << "width: " << width << std::endl; 
-      std::cout << "input_width: " << input_width << std::endl; 
-      std::cout << "_num_anchors: " << _num_anchors << std::endl; 
-      std::cout << "K: " << K << std::endl; 
-      std::cout << "bbox_preds_len: " << bbox_preds_len << std::endl; 
 
       float* anchor_centers_x; 
       float* anchor_centers_y; 
@@ -545,8 +485,6 @@ struct FaceApp {
          /* int stride,              */ stride, 
          /* int _num_anchors         */ _num_anchors
       ); 
-
-//       vec::print(anchor_centers_x, height * width * _num_anchors);
 
       std::vector<int> pos_inds = np_where(
         /*float** data_in, */ scores, 
@@ -581,7 +519,6 @@ struct FaceApp {
 
       } // if (use_kps)
 
-      std::cout << "==========================" << std::endl;
     } // for i from 0 to _feat_stride_fpn size
 
     argsort(pre_det); 
@@ -604,8 +541,6 @@ struct FaceApp {
       vec::print(x.second.second); 
     } // for loop over elements of pre_det
 
-
-
     // ====================================================================
     input_mean = 127.5f;
     input_std  = 127.5f;
@@ -615,6 +550,8 @@ struct FaceApp {
     std::vector<int64_t> input_shape = tensor_info.GetShape();
     cv::Size input_size2((int)input_shape[3], (int)input_shape[2]); // width, height
 
+    // create output vector
+    std::vector<std::vector<float>> embeddings; 
 
     for (const auto x: det) { 
       std::vector<float> kps = x.second.second; 
@@ -634,13 +571,11 @@ struct FaceApp {
       // !!!!!!!!!!AVOID HARD CODING !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
       cv::Mat kps_mat(5, 2, CV_32F, kps.data());
       // !!!!!!!!!!AVOID HARD CODING !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-      std::cout << "kps_mat: " << kps_mat << std::endl; 
 
       cv::Mat dst = arcface_dst * ratio;
       for (int i = 0; i < dst.rows; i++) {
           dst.at<float>(i, 0) += diff_x;
       }
-      std::cout << "dst: " << dst << std::endl; 
 
       cv::Mat M = cv::estimateAffinePartial2D(kps_mat, dst);
 //       cv::Mat M = (cv::Mat_<float>(2, 3) <<
@@ -648,7 +583,6 @@ struct FaceApp {
 //           -0.34702577f, 0.39182017f, 192.44877767f
 //       );
       std::cout << "M: " << M << std::endl; 
-
 
       cv::Mat warped;
       cv::warpAffine(
@@ -661,41 +595,49 @@ struct FaceApp {
           cv::Scalar(0.0, 0.0, 0.0)           // borderValue (black)
       );
 
-    cv::Mat blob = cv::dnn::blobFromImage(
-        warped,                         // input image
-        1.0 / input_std,                 // scale factor
-        input_size2,                     // target size
-        cv::Scalar(input_mean, input_mean, input_mean), // mean subtraction
-        true,                            // swapRB
-        false                            // crop
-    );
+      cv::Mat blob = cv::dnn::blobFromImage(
+          warped,                         // input image
+          1.0 / input_std,                 // scale factor
+          input_size2,                     // target size
+          cv::Scalar(input_mean, input_mean, input_mean), // mean subtraction
+          true,                            // swapRB
+          false                            // crop
+      );
 
-    std::vector<int64_t> input_shape = {1, blob.size[1], blob.size[2], blob.size[3]}; 
- 
-    auto output_tensors = recognition_model.run(
-      /*const cv::Mat& blob,                           */ blob, 
-      /*const size_t& input_tensor_size,               */ blob.total(), 
-      /*const std::vector<int64_t>& input_tensor_shape */ input_shape
-    ); 
+      std::vector<int64_t> input_shape = {1, blob.size[1], blob.size[2], blob.size[3]}; 
+   
+      auto output_tensors = recognition_model.run(
+        /*const cv::Mat& blob,                           */ blob, 
+        /*const size_t& input_tensor_size,               */ blob.total(), 
+        /*const std::vector<int64_t>& input_tensor_shape */ input_shape
+      ); 
 
-    // 4. Get the embedding result
-    float* embedding_data = output_tensors.front().GetTensorMutableData<float>();
+      // 4. Get the embedding result
+      float* embedding_data = output_tensors.front().GetTensorMutableData<float>();
 
-    // Optional: store embedding in a std::vector<float>
-    size_t embedding_size = output_tensors.front().GetTensorTypeAndShapeInfo().GetElementCount();
-    std::vector<float> embedding(embedding_data, embedding_data + embedding_size);
+      // Optional: store embedding in a std::vector<float>
+      size_t embedding_size = output_tensors.front().GetTensorTypeAndShapeInfo().GetElementCount();
+      std::vector<float> embedding(embedding_data, embedding_data + embedding_size);
 
-    vec::print(embedding, "embedding", 8, false);
-    std::cout << "embedding shape: " << embedding.size() << std::endl; 
+      vec::print(embedding, "embedding", 8, false);
+      std::cout << "embedding shape: " << embedding.size() << std::endl; 
 
+      embeddings.push_back(embedding); 
 
       vec::draw_line(40, '-'); 
     } // for (const auto x: det)
 
+    return embeddings; 
   } // void getEmbeddings
 
 }; // struce FaceApp
 
+
+// cosine similarity function
+float cosine_similarity(const std::vector<float>& a, const std::vector<float>& b) {
+    cv::Mat A(a), B(b);
+    return A.dot(B) / (cv::norm(A) * cv::norm(B));
+} // float cosine_similarity
 
 int main(int argc, char* argv[]) {
 
@@ -707,36 +649,62 @@ int main(int argc, char* argv[]) {
     // extract image file name
     std::string input_file = argv[1]; 
 
-    // Create requirement models
+    // Initialize FaceApp 
     const std::string detection_model_path = "/root/.insightface/models/buffalo_l/det_10g.onnx";
     const std::string recognition_model_path = "/root/.insightface/models/buffalo_l/w600k_r50.onnx";
-
     FaceApp face_app(detection_model_path, recognition_model_path); 
 
-//     if (isImage(input_file)) { 
-//       std::cout << "the file is an image." << std::endl; 
-//       return 1; 
-//     } // if (isImage(input_file))
-// 
-//     else if (isVideo(input_file)) { 
-//       std::cout << "The input file is a video." << std::endl; 
-//       return 1; 
-//     } // else if (isVideo(input_file))
-// 
-//     else {
-//       std::cout << "Unknown or unsupported file format: " << input_file << std::endl; 
-//       return 1; 
-//     } // else after detecting image or video
+    if (argc == 2) { 
 
+      // Extracting embeddings of an image input file
+      if (isImage(input_file)) { 
+        std::cout << "Processing an image input file ... ." << std::endl; 
 
-    // Load image
-    cv::Mat img = cv::imread(input_file);
-    if (img.empty()) {
-        std::cerr << "Error loading image!" << std::endl;
-        return -1;
-    }
+        // Load image
+        cv::Mat img = cv::imread(input_file);
 
-    face_app.getEmbeddings(img); 
+        std::vector<std::vector<float>> embeddings = face_app.getEmbeddings(img); 
+        vec::print(embeddings, "embeddings", 8, false); 
+        std::cout << "embedding size: " << embeddings.size() << " " << embeddings[0].size() << std::endl;
+
+        return 1; 
+      } // if (isImage(input_file))
+
+      // Extracting embeddings of a video input file
+      else if (isVideo(input_file)) { 
+        std::cout << "The input file is a video." << std::endl; 
+        return 1; 
+      } // else if (isVideo(input_file))
+
+      else {
+        std::cout << "Unknown or unsupported file format: " << input_file << std::endl; 
+        return 1; 
+      } // else after detecting image or video
+    } // if (argc == 2)
+
+    else if (argc == 3) { 
+
+      std::string input_file2 = argv[2]; 
+
+      // Extracting embeddings of an image input file
+      if (isImage(input_file) && isImage(input_file2)) { 
+        std::cout << "Compairing two image input files ... ." << std::endl; 
+
+        // Load image
+        cv::Mat img  = cv::imread(input_file );
+        cv::Mat img2 = cv::imread(input_file2);
+
+        std::vector<std::vector<float>> embeddings  = face_app.getEmbeddings(img ); 
+        std::vector<std::vector<float>> embeddings2 = face_app.getEmbeddings(img2); 
+
+        float sim = cosine_similarity(embeddings[0], embeddings2[0]); 
+        std::cout << "Similarity: " << sim << std::endl; 
+
+        return 1; 
+      } // if (isImage(input_file))
+
+    } // else if (argc == 3)
+
 
 
     return 0;

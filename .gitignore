@@ -7,10 +7,12 @@
 # all images
 *.jpg
 *.jpeg
+*.pjpeg
+*.webp
 
 # all tgz
 *.tgz
-
+*.tar
 
 # 
 *onnxruntime-linux-x64-gpu-1.17.3/
