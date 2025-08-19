@@ -6,6 +6,7 @@
 #include <numeric>
 #include <tuple>
 #include <map>
+#include <sqlite3.h>
 
 #include "vector.h"             // library to print our matrices
 
@@ -236,6 +237,18 @@ bool isImage(const std::string& filename) {
     return (ext == "jpg"   || ext == "jpeg" || ext == "png" || 
             ext == "bmp"   || ext == "tiff" || ext == "gif" ||
             ext == "pjpeg" || ext == "webp");
+}
+
+// function to check input file is an image or not
+bool isDB(const std::string& filename) {
+    std::string ext;
+    size_t pos = filename.find_last_of(".");
+    if (pos != std::string::npos) {
+        ext = filename.substr(pos + 1);
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    }
+
+    return (ext == "db");
 }
 
 // function to check input file is a video or not
@@ -649,7 +662,80 @@ float cosine_similarity(const std::vector<float>& a, const std::vector<float>& b
     return A.dot(B) / (cv::norm(A) * cv::norm(B));
 } // float cosine_similarity
 
+
+// Helper to convert vector<float> to a space-separated string
+std::string vectorToString(const std::vector<float>& vec) {
+    std::ostringstream oss;
+    for (size_t i = 0; i < vec.size(); ++i) {
+        oss << vec[i];
+        if (i + 1 < vec.size()) oss << " ";
+    }
+    return oss.str();
+}
+
+// Convert space-separated string → vector<float>
+std::vector<float> stringToVector(const std::string& str) {
+    std::vector<float> vec;
+    std::istringstream iss(str);
+    float val;
+    while (iss >> val) {
+        vec.push_back(val);
+    }
+    return vec;
+}
+
+// Helper to print all records in the embeddings table
+void printAllEmbeddings(sqlite3* db) {
+    const char* select_sql = "SELECT id, label, vector FROM embeddings;";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(db, select_sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        std::cout << "=== All records in DB ===\n";
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            int id = sqlite3_column_int(stmt, 0);
+            const unsigned char* lbl = sqlite3_column_text(stmt, 1);
+            const unsigned char* vec_txt = sqlite3_column_text(stmt, 2);
+            std::string vec_str = (const char*)vec_txt;
+            std::vector<float> vec = stringToVector(vec_str);
+
+            std::cout << "ID: " << id
+                      << " | Label: " << lbl  
+                      << " | Vector: ";
+            vec::print(vec); 
+        }
+        sqlite3_finalize(stmt);
+    } else {
+        std::cerr << "Error selecting data: " << sqlite3_errmsg(db) << "\n";
+    }
+}
+
 int main(int argc, char* argv[]) {
+
+    sqlite3* db;
+    char* errMsg = nullptr;
+
+    // Open (or create) database
+    if (sqlite3_open("embeddings.db", &db) != SQLITE_OK) {
+        std::cerr << "Error opening DB: " << sqlite3_errmsg(db) << "\n";
+        return 1;
+    }
+
+    // Create table if not exists
+    const char* create_table_sql =
+        "CREATE TABLE IF NOT EXISTS embeddings ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "label TEXT,"
+        "vector TEXT"
+        ");";
+    if (sqlite3_exec(db, create_table_sql, nullptr, nullptr, &errMsg) != SQLITE_OK) {
+        std::cerr << "Error creating table: " << errMsg << "\n";
+        sqlite3_free(errMsg);
+    }
+
+    // print all existing embeddings
+    vec::draw_line(); 
+    printAllEmbeddings(db); 
+    vec::draw_line(); 
 
     if (argc < 2) { 
       std::cerr << "Usage: " << argv[0] << " <input_file>\n"; 
@@ -680,6 +766,21 @@ int main(int argc, char* argv[]) {
         std::vector<std::vector<float>> embeddings = face_app.getEmbeddings(img); 
         vec::print(embeddings, "embeddings", 8, false); 
         std::cout << "embedding size: " << embeddings.size() << " " << embeddings[0].size() << std::endl;
+
+        // Insert a new embedding
+        std::string vec_str = vectorToString(embeddings[0]);
+        std::string label = "person_001";
+
+        std::string insert_sql =
+            "INSERT INTO embeddings (label, vector) VALUES ('" +
+            label + "', '" + vec_str + "');";
+
+        if (sqlite3_exec(db, insert_sql.c_str(), nullptr, nullptr, &errMsg) != SQLITE_OK) {
+            std::cerr << "Error inserting data: " << errMsg << "\n";
+            sqlite3_free(errMsg);
+        } else {
+            std::cout << "Inserted new embedding for: " << label << "\n";
+        }
 
         return 1; 
       } // if (isImage(input_file))
@@ -746,6 +847,8 @@ int main(int argc, char* argv[]) {
     } // else if (argc == 3)
 
 
+    // Close DB
+    sqlite3_close(db);
 
     return 0;
 }

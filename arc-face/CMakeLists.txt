@@ -17,11 +17,23 @@ include_directories("/app/torcpp/include")
 find_package(OpenCV REQUIRED)
 include_directories(${OpenCV_INCLUDE_DIRS})
 
+# Find SQLite3
+find_package(SQLite3 REQUIRED)
+include_directories(${SQLite3_INCLUDE_DIRS})
+
 add_executable(core ${CMAKE_CURRENT_LIST_DIR}/src/core.cpp)
 target_link_libraries(core
   onnxruntime
   ${OpenCV_LIBS}
   ${ONNXRUNTIME_DIR}/lib/libonnxruntime.so
   ${ONNXRUNTIME_DIR}/lib/libonnxruntime_providers_cuda.so
+  ${SQLite3_LIBRARIES}
 )
+
+
+
+
+
+
+
 
