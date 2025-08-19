@@ -261,7 +261,8 @@ struct ModelHandler {
 
   ModelHandler(
     const std::string& model_path, 
-    const std::string& name="onnx_model"
+    const std::string& name="onnx_model", 
+    const bool device=false
   )
     : env(ORT_LOGGING_LEVEL_WARNING, name.c_str()),
       session_options(), 
@@ -271,6 +272,14 @@ struct ModelHandler {
 
     // model name
     std::cout << name << " model has been initiallized." << std::endl; 
+
+    if (device) { 
+      // Enable CUDA (GPU) execution provider
+      OrtStatus* status = OrtSessionOptionsAppendExecutionProvider_CUDA(session_options, 0);
+
+      // Re-create the session with CUDA options
+      session = Ort::Session(env, model_path.c_str(), session_options);
+    }
 
     // Inputs
     size_t num_inputs = session.GetInputCount();
@@ -337,10 +346,11 @@ struct FaceApp {
 
   FaceApp(
     const std::string& detection_model_path, 
-    const std::string& recognition_model_path
+    const std::string& recognition_model_path, 
+    const bool device=false
   )
-    : detection_model(detection_model_path, "Detection"),
-      recognition_model(recognition_model_path, "Recognition")
+    : detection_model(detection_model_path, "Detection", device),
+      recognition_model(recognition_model_path, "Recognition", device)
   {}
 
   std::vector<std::vector<float>> getEmbeddings(
@@ -652,7 +662,11 @@ int main(int argc, char* argv[]) {
     // Initialize FaceApp 
     const std::string detection_model_path = "/root/.insightface/models/buffalo_l/det_10g.onnx";
     const std::string recognition_model_path = "/root/.insightface/models/buffalo_l/w600k_r50.onnx";
-    FaceApp face_app(detection_model_path, recognition_model_path); 
+    FaceApp face_app(
+      /* const std::string& detection_model_path,   */ detection_model_path,
+      /* const std::string& recognition_model_path, */ recognition_model_path,
+      /* const bool device=false                    */ 1
+    ); 
 
     if (argc == 2) { 
 
