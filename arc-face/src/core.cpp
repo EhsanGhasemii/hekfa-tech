@@ -672,7 +672,33 @@ int main(int argc, char* argv[]) {
 
       // Extracting embeddings of a video input file
       else if (isVideo(input_file)) { 
-        std::cout << "The input file is a video." << std::endl; 
+
+        std::cout << "Processing a video input file ... ." << std::endl; 
+
+        // Load Video
+        std::cout << "input_file: " << input_file << std::endl; 
+        cv::VideoCapture cap("/app/hekfa-tech/arc-face/person2.mp4");
+
+        uint32_t i = 0; 
+        while (1) {
+          std::cout << "i: " << i << std::endl; 
+
+          // create a frame
+          cv::Mat frame;
+          cap >> frame;
+          if (frame.empty()) { 
+            break;
+          } // if (frame.empty())
+
+          // main core
+          std::vector<std::vector<float>> embeddings = face_app.getEmbeddings(frame); 
+
+          cv::Mat image1 ;
+          cv::resize(frame, image1, cv::Size( 896 , 416));//, INTER_LINEAR);
+
+          i++; 
+        } // while
+
         return 1; 
       } // else if (isVideo(input_file))
 

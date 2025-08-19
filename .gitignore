@@ -10,6 +10,9 @@
 *.pjpeg
 *.webp
 
+# video format data
+*.mp4
+
 # all tgz
 *.tgz
 *.tar
