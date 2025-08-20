@@ -33,9 +33,9 @@ def main():
 
     threshold = 0.35  # Adjust based on accuracy needs
     if similarity > threshold:
-        print("✅ Same person")
+        print("Same person")
     else:
-        print("❌ Different persons")
+        print("Different persons")
 
 if __name__ == "__main__":
     main()
