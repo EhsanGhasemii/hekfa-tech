@@ -1,33 +1,34 @@
-# import cv2
-# import insightface
-# from insightface.app import FaceAnalysis
-# 
-# # Initialize the face analysis model
-# face_app = FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider'])
-# face_app.prepare(ctx_id=0)  # Use GPU (CUDA)
-# 
-# # Load image
-# img = cv2.imread('persons.jpg')  # Replace with your image filename
-# if img is None:
-#     raise FileNotFoundError("Image not found!")
-# 
-# # Detect faces
-# faces = face_app.get(img)
-# 
-# # Draw results on image
-# for face in faces:
-#     x1, y1, x2, y2 = map(int, face.bbox)
-#     cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-# 
-#     # Draw facial landmarks
-#     for (x, y) in face.kps:
-#         cv2.circle(img, (int(x), int(y)), 2, (255, 0, 0), -1)
-# 
-# # Save result image
-# output_path = 'output.jpg'
-# cv2.imwrite(output_path, img)
-# print(f"Output image saved as: {output_path}")
-# 
+import cv2
+import insightface
+from insightface.app import FaceAnalysis
+
+# Initialize the face analysis model
+face_app = FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider'])
+face_app.prepare(ctx_id=0)  # Use GPU (CUDA)
+
+# Load image
+img = cv2.imread('persons.jpg')  # Replace with your image filename
+if img is None:
+    raise FileNotFoundError("Image not found!")
+
+# Detect faces
+faces = face_app.get(img)
+
+# Draw results on image
+for face in faces:
+    x1, y1, x2, y2 = map(int, face.bbox)
+    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+    # Draw facial landmarks
+    for (x, y) in face.kps:
+        cv2.circle(img, (int(x), int(y)), 2, (255, 0, 0), -1)
+
+# Save result image
+print('face[gender]: ', face)
+output_path = 'output.jpg'
+cv2.imwrite(output_path, img)
+print(f"Output image saved as: {output_path}")
+
 
 
 
@@ -121,6 +122,27 @@ def nms(dets, nms_thresh):
         order = order[inds + 1]
 
     return keep
+
+
+
+def transform(data, center, output_size, scale, rotation):
+    scale_ratio = scale
+    rot = float(rotation) * np.pi / 180.0
+    #translation = (output_size/2-center[0]*scale_ratio, output_size/2-center[1]*scale_ratio)
+    t1 = trans.SimilarityTransform(scale=scale_ratio)
+    cx = center[0] * scale_ratio
+    cy = center[1] * scale_ratio
+    t2 = trans.SimilarityTransform(translation=(-1 * cx, -1 * cy))
+    t3 = trans.SimilarityTransform(rotation=rot)
+    t4 = trans.SimilarityTransform(translation=(output_size / 2,
+                                                output_size / 2))
+    t = t1 + t2 + t3 + t4
+    M = t.params[0:2]
+    cropped = cv2.warpAffine(data,
+                             M, (output_size, output_size),
+                             borderValue=0.0)
+    return cropped, M
+
 
 
 
@@ -394,6 +416,7 @@ output_shape = outputs[0].shape
 if ctx_id<0:
     session.set_providers(['CPUExecutionProvider'])
 
+
 ret = []
 print('det: ', det)
 for i in range(det.shape[0]):
@@ -413,12 +436,85 @@ for i in range(det.shape[0]):
     # Arc-face get-feat
     if not isinstance(aimg, list):
         aimg = [aimg]
-    
     blob = cv2.dnn.blobFromImages(aimg, 1.0 / input_std, input_size,
                                   (input_mean, input_mean, input_mean), swapRB=True)
     face['embedding'] = session.run(output_names, {input_name: blob})[0]
-
     ret.append(face)
+
+
+# Attribute model initiallization
+print("Attribute model has been initiallized.")
+
+# start session
+session = onnxruntime.InferenceSession(genderage_model_path, None)
+
+inputs = session.get_inputs()
+input_cfg = inputs[0]
+input_shape = input_cfg.shape
+outputs = session.get_outputs()
+
+# model_file
+model = onnx.load(genderage_model_path)
+
+find_sub = True
+find_mul = True
+input_mean = 0.0
+input_std = 1.0
+
+input_cfg = session.get_inputs()[0]
+input_shape = input_cfg.shape
+input_name = input_cfg.name
+input_size = tuple(input_shape[2:4][::-1])
+outputs = session.get_outputs()
+output_names = []
+for out in outputs:
+    output_names.append(out.name)
+output_shape = outputs[0].shape
+if output_shape[1]==3:
+    taskname = 'genderage'
+else:
+    taskname = 'attribute_%d'%output_shape[1]
+
+
+
+# Attribute get function
+ret = []
+print('det: ', det)
+for i in range(det.shape[0]):
+    bbox = det[i, 0:4]
+    det_score = det[i, 4]
+    kps = None
+    if kpss is not None:
+        kps = kpss[i]
+
+    face = {'bbox':bbox, 'kps':kps, 'det_score':det_score}
+
+    # Attribute model get function
+    bbox = face['bbox']
+    w, h = (bbox[2] - bbox[0]), (bbox[3] - bbox[1])
+    center = (bbox[2] + bbox[0]) / 2, (bbox[3] + bbox[1]) / 2
+    rotate = 0
+    _scale = input_size[0]  / (max(w, h)*1.5)
+    aimg, M = transform(img, center, input_size[0], _scale, rotate)
+    input_size = tuple(aimg.shape[0:2][::-1])
+    blob = cv2.dnn.blobFromImage(aimg, 1.0/input_std, input_size, (input_mean, input_mean, input_mean), swapRB=True)
+    pred = session.run(output_names, {input_name : blob})[0][0]
+#     print('(w, h): ', w, " ", h) 
+#     print('center: ', center)
+#     print('_scale: ', _scale)
+    print('input_size: ', input_size)
+    print('pred: ', pred)
+
+    if taskname=='genderage':
+        gender = np.argmax(pred[:2])
+        age = int(np.round(pred[2]*100))
+        face['gender'] = gender
+        face['age'] = age
+        print('age: ', age)
+        print('gender: ', gender)
+#         return gender, age
+#     else:
+#         return pred
 
 
 

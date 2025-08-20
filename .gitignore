@@ -23,3 +23,7 @@
 *buffalo_l/
 *insightface/
 *false/
+
+
+# DataBases
+*.db

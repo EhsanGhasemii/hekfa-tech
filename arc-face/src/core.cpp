@@ -264,6 +264,61 @@ bool isVideo(const std::string& filename) {
             ext == "mov" || ext == "flv" || ext == "wmv");
 }
 
+// trnasform
+std::pair<cv::Mat, cv::Mat> transform(
+    const cv::Mat& data,
+    const cv::Point2f& center,
+    int output_size,
+    float scale,
+    float rotation)
+{
+    float scale_ratio = scale;
+    float rot = rotation * CV_PI / 180.0f; // degrees → radians
+
+    // --- Step 1: scale matrix
+    cv::Mat t1 = (cv::Mat_<double>(3, 3) <<
+        scale_ratio, 0, 0,
+        0, scale_ratio, 0,
+        0, 0, 1);
+
+    // --- Step 2: translate center to origin
+    float cx = center.x * scale_ratio;
+    float cy = center.y * scale_ratio;
+    cv::Mat t2 = (cv::Mat_<double>(3, 3) <<
+        1, 0, -cx,
+        0, 1, -cy,
+        0, 0, 1);
+
+    // --- Step 3: rotation
+    double cos_r = cos(rot);
+    double sin_r = sin(rot);
+    cv::Mat t3 = (cv::Mat_<double>(3, 3) <<
+        cos_r, -sin_r, 0,
+        sin_r,  cos_r, 0,
+        0,      0,     1);
+
+    // --- Step 4: translate back to output center
+    cv::Mat t4 = (cv::Mat_<double>(3, 3) <<
+        1, 0, output_size / 2.0,
+        0, 1, output_size / 2.0,
+        0, 0, 1);
+
+    // --- Final affine transformation matrix
+    cv::Mat T = t4 * t3 * t2 * t1;  // order matches Python's (t1 + t2 + t3 + t4)
+
+    // OpenCV warpAffine needs 2x3 matrix
+    cv::Mat M = T(cv::Rect(0, 0, 3, 2)).clone();
+
+    // --- Warp the image
+    cv::Mat cropped;
+    cv::warpAffine(data, cropped, M, cv::Size(output_size, output_size),
+                   cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0));
+
+    return {cropped, M};
+} // std::pair<cv::Mat, cv::Mat> transform
+
+
+
 // Create ModelHandler
 struct ModelHandler { 
   Ort::Env env;
@@ -356,21 +411,24 @@ struct ModelHandler {
 struct FaceApp { 
   ModelHandler detection_model; 
   ModelHandler recognition_model; 
+  ModelHandler genderage_model; 
 
   FaceApp(
     const std::string& detection_model_path, 
     const std::string& recognition_model_path, 
+    const std::string& genderage_model_path, 
     const bool device=false
   )
-    : detection_model(detection_model_path, "Detection", device),
-      recognition_model(recognition_model_path, "Recognition", device)
+    : detection_model  (detection_model_path  , "Detection"  , device),
+      recognition_model(recognition_model_path, "Recognition", device), 
+      genderage_model  (genderage_model_path  , "GenderAge"  , device)
   {}
 
-  std::vector<std::vector<float>> getEmbeddings(
+  std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> getEmbeddings(
     const cv::Mat& img
   ) { 
 
-    // Assumptions from earlier context
+    // Detection model initiallization  
     float input_mean = 127.5f;
     float input_std = 128.0f;
 
@@ -558,11 +616,6 @@ struct FaceApp {
 
     // print result
     vec::draw_line(); 
-    vec::print(keep, "keep"); 
-    for (const auto x: det) { 
-      printf("%f\t", x.first); 
-      vec::print(x.second.second); 
-    } // for loop over elements of pre_det
 
     // ====================================================================
     input_mean = 127.5f;
@@ -605,7 +658,6 @@ struct FaceApp {
 //           0.39182017f, 0.34702577f, -227.6744765f, 
 //           -0.34702577f, 0.39182017f, 192.44877767f
 //       );
-      std::cout << "M: " << M << std::endl; 
 
       cv::Mat warped;
       cv::warpAffine(
@@ -642,15 +694,58 @@ struct FaceApp {
       size_t embedding_size = output_tensors.front().GetTensorTypeAndShapeInfo().GetElementCount();
       std::vector<float> embedding(embedding_data, embedding_data + embedding_size);
 
-      vec::print(embedding, "embedding", 8, false);
-      std::cout << "embedding shape: " << embedding.size() << std::endl; 
-
       embeddings.push_back(embedding); 
 
-      vec::draw_line(40, '-'); 
     } // for (const auto x: det)
 
-    return embeddings; 
+
+    // Attribute model Initiallization ===========================
+    input_mean = 0.0; 
+    input_std = 1.0; 
+    input_size = {96, 96}; 
+
+    cv::Size b_input_size(96, 96); 
+
+
+    std::vector<std::pair<bool, int>> gender_age; 
+    for (const auto x: det) { 
+ 
+      std::vector<float> bbox = x.second.first; 
+      float w = bbox[2] - bbox[0]; 
+      float h = bbox[3] - bbox[1]; 
+
+      cv::Point2f center((bbox[2] + bbox[0]) / 2, (bbox[3] + bbox[1]) / 2);
+
+      float rotate = 0.0; 
+      float _scale = input_size.first / (std::max(w, h) * 1.5); 
+
+      auto [aimg, M] = transform(img, center, input_size.first, _scale, rotate);
+
+      // Create blob
+      cv::Mat blob = cv::dnn::blobFromImage(
+          aimg,                                            // image
+          1.0 / input_std,                                 // scalefactor
+          b_input_size,                                    // size
+          cv::Scalar(input_mean, input_mean, input_mean),  // mean subtraction
+          true,                                            // swapRB
+          false                                            // crop
+      );
+ 
+      std::vector<int64_t> input_shape = {1, blob.size[1], blob.size[2], blob.size[3]}; 
+
+      auto pred = genderage_model.run(
+        /*const cv::Mat& blob,                           */ blob, 
+        /*const size_t& input_tensor_size,               */ blob.total(), 
+        /*const std::vector<int64_t>& input_tensor_shape */ input_shape
+      ); 
+      float* pred_f = pred[0].GetTensorMutableData<float>(); 
+      bool gender = (pred_f[0] > pred_f[1]) ? 0 : 1;  
+      int age = pred_f[2] * 100; 
+
+      gender_age.push_back({gender, age}); 
+    } // for (const auto x: det)
+
+    return {embeddings, gender_age}; 
   } // void getEmbeddings
 
 }; // struce FaceApp
@@ -709,6 +804,8 @@ void printAllEmbeddings(sqlite3* db) {
     }
 }
 
+
+
 int main(int argc, char* argv[]) {
 
     sqlite3* db;
@@ -748,9 +845,12 @@ int main(int argc, char* argv[]) {
     // Initialize FaceApp 
     const std::string detection_model_path = "/root/.insightface/models/buffalo_l/det_10g.onnx";
     const std::string recognition_model_path = "/root/.insightface/models/buffalo_l/w600k_r50.onnx";
+    const std::string genderage_model_path = "/root/.insightface/models/buffalo_l/genderage.onnx";
+
     FaceApp face_app(
       /* const std::string& detection_model_path,   */ detection_model_path,
       /* const std::string& recognition_model_path, */ recognition_model_path,
+      /* const std::string& genderage_model_path,   */ genderage_model_path,
       /* const bool device=false                    */ 1
     ); 
 
@@ -763,9 +863,14 @@ int main(int argc, char* argv[]) {
         // Load image
         cv::Mat img = cv::imread(input_file);
 
-        std::vector<std::vector<float>> embeddings = face_app.getEmbeddings(img); 
-        vec::print(embeddings, "embeddings", 8, false); 
-        std::cout << "embedding size: " << embeddings.size() << " " << embeddings[0].size() << std::endl;
+        std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result = face_app.getEmbeddings(img); 
+        std::vector<std::vector<float>> embeddings = result.first; 
+        std::vector<std::pair<bool,int>> sex = result.second; 
+
+        for (uint32_t i = 0; i < embeddings.size(); ++i) { 
+          printf("%d\t%d\t", sex[i].first, sex[i].second); 
+          vec::print(embeddings[i]); 
+        }
 
         // Insert a new embedding
         std::string vec_str = vectorToString(embeddings[0]);
@@ -781,7 +886,6 @@ int main(int argc, char* argv[]) {
         } else {
             std::cout << "Inserted new embedding for: " << label << "\n";
         }
-
         return 1; 
       } // if (isImage(input_file))
 
@@ -806,7 +910,13 @@ int main(int argc, char* argv[]) {
           } // if (frame.empty())
 
           // main core
-          std::vector<std::vector<float>> embeddings = face_app.getEmbeddings(frame); 
+          std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result = face_app.getEmbeddings(frame); 
+          std::vector<std::vector<float>> embeddings = result.first; 
+          std::vector<std::pair<bool,int>> sex = result.second; 
+
+          // print results
+          printf("%d\t%d\t", sex[0].first, sex[0].second); 
+          vec::print(embeddings[0]); 
 
           cv::Mat image1 ;
           cv::resize(frame, image1, cv::Size( 896 , 416));//, INTER_LINEAR);
@@ -835,10 +945,10 @@ int main(int argc, char* argv[]) {
         cv::Mat img  = cv::imread(input_file );
         cv::Mat img2 = cv::imread(input_file2);
 
-        std::vector<std::vector<float>> embeddings  = face_app.getEmbeddings(img ); 
-        std::vector<std::vector<float>> embeddings2 = face_app.getEmbeddings(img2); 
+        std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result  = face_app.getEmbeddings(img ); 
+        std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result2 = face_app.getEmbeddings(img2); 
 
-        float sim = cosine_similarity(embeddings[0], embeddings2[0]); 
+        float sim = cosine_similarity(result.first[0], result2.first[0]); 
         std::cout << "Similarity: " << sim << std::endl; 
 
         return 1; 
