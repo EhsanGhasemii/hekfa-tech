@@ -26,3 +26,11 @@ ORT_API_STATUS(OrtSessionOptionsAppendExecutionProvider_CUDA, _In_ OrtSessionOpt
 }
 #endif
 ```
+
+
+Below Combinations of cuda-drivers and cuda-toolkits has been used.
+
+```
+cuda_11.8.0_520.61.05_linux.run
+cudnn-linux-x86_64-8.6.0.163_cuda11-archive.tar.xz
+```
