@@ -4,14 +4,14 @@ project(core)
 set(CMAKE_CXX_STANDARD 17)
 
 #set(ONNXRUNTIME_DIR "/home/ehsan/main/projects/onnxruntime-1.17.3/")
-set(ONNXRUNTIME_DIR "${CMAKE_SOURCE_DIR}/onnxruntime-linux-x64-gpu-1.17.3/")
+set(ONNXRUNTIME_DIR "${CMAKE_SOURCE_DIR}/onnxruntime-linux-x64-gpu-1.17.0/")
 
 
 include_directories(${ONNXRUNTIME_DIR}/include)
 include_directories(${ONNXRUNTIME_DIR}/include/core/providers/cuda)
 #include_directories(${ONNXRUNTIME_DIR}/include/onnxruntime/core/session)
 link_directories(${ONNXRUNTIME_DIR}/lib)
-include_directories("/app/torcpp/include")
+include_directories("/app/projects/torcpp/include")
 
 # Find OpenCV
 find_package(OpenCV REQUIRED)
@@ -26,7 +26,6 @@ target_link_libraries(core
   onnxruntime
   ${OpenCV_LIBS}
   ${ONNXRUNTIME_DIR}/lib/libonnxruntime.so
-  ${ONNXRUNTIME_DIR}/lib/libonnxruntime_providers_cuda.so
   ${SQLite3_LIBRARIES}
 )
 
