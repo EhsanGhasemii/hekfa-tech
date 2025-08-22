@@ -27,3 +27,8 @@
 
 # DataBases
 *.db
+
+
+# onnx and opencv directories
+*opencv*
+*onnxruntime-linux-x64-gpu-1.17.0*
