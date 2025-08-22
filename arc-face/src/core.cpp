@@ -896,7 +896,7 @@ int main(int argc, char* argv[]) {
 
         // Load Video
         std::cout << "input_file: " << input_file << std::endl; 
-        cv::VideoCapture cap("/app/hekfa-tech/arc-face/person2.mp4");
+        cv::VideoCapture cap(input_file);
 
         uint32_t i = 0; 
         while (1) {
