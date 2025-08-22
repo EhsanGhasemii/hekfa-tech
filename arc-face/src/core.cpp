@@ -745,6 +745,28 @@ struct FaceApp {
       gender_age.push_back({gender, age}); 
     } // for (const auto x: det)
 
+
+    // draw rectangles for each faces
+    for (const auto x: det) { 
+      std::vector<float> bbox = x.second.first; 
+      int x1 = static_cast<int>(bbox[0]); 
+      int y1 = static_cast<int>(bbox[1]); 
+      int x2 = static_cast<int>(bbox[2]); 
+      int y2 = static_cast<int>(bbox[3]); 
+
+      cv::rectangle(img,
+                    cv::Point(x1, y1),
+                    cv::Point(x2, y2),
+                    cv::Scalar(0, 255, 0),  // Green box
+                    2);    
+
+    } // for (const auto x: det)
+
+
+
+
+
+
     return {embeddings, gender_age}; 
   } // void getEmbeddings
 
@@ -872,6 +894,18 @@ int main(int argc, char* argv[]) {
           vec::print(embeddings[i]); 
         }
 
+        cv::Size targetSize(640, 480);
+        cv::resize(img, img, targetSize);
+
+        // Create a window
+        cv::namedWindow("Image Window", cv::WINDOW_AUTOSIZE);
+
+        // Show the image
+        cv::imshow("Image Window", img);
+
+        // Wait until user presses a key
+        cv::waitKey(0);
+
         // Insert a new embedding
         std::string vec_str = vectorToString(embeddings[0]);
         std::string label = "person_001";
@@ -899,6 +933,8 @@ int main(int argc, char* argv[]) {
         cv::VideoCapture cap(input_file);
 
         uint32_t i = 0; 
+
+        cv::namedWindow("Video Window", cv::WINDOW_AUTOSIZE);
         while (1) {
           std::cout << "i: " << i << std::endl; 
 
@@ -918,11 +954,14 @@ int main(int argc, char* argv[]) {
           printf("%d\t%d\t", sex[0].first, sex[0].second); 
           vec::print(embeddings[0]); 
 
-          cv::Mat image1 ;
-          cv::resize(frame, image1, cv::Size( 896 , 416));//, INTER_LINEAR);
-
+          cv::imshow("Video Window", frame);
+          char c = (char)cv::waitKey(30);
+          if (c == 'q' || c == 27) break;  // 27 = ESC
           i++; 
         } // while
+
+        cap.release();
+        cv::destroyAllWindows();
 
         return 1; 
       } // else if (isVideo(input_file))
@@ -950,6 +989,24 @@ int main(int argc, char* argv[]) {
 
         float sim = cosine_similarity(result.first[0], result2.first[0]); 
         std::cout << "Similarity: " << sim << std::endl; 
+
+        cv::Size targetSize(640, 480);
+        cv::resize(img, img, targetSize);
+        cv::resize(img2, img2, targetSize);
+
+        // Create two separate windows
+        cv::namedWindow("Image 1", cv::WINDOW_AUTOSIZE);
+        cv::namedWindow("Image 2", cv::WINDOW_AUTOSIZE);
+
+        // Show the images
+        cv::imshow("Image 1", img);
+        cv::imshow("Image 2", img2);
+
+        // Wait until user presses a key
+        cv::waitKey(0);
+
+        // Destroy windows (optional)
+        cv::destroyAllWindows();
 
         return 1; 
       } // if (isImage(input_file))
