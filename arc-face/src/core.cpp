@@ -89,108 +89,6 @@ void captureStream(int idx, const std::string& url) {
   cap.release();
 } // void captureStream
 
-void processYOLO(network* net, char** class_names, int num_classes) {
-  std::string ffmpeg_cmd =
-    "ffmpeg -hide_banner -loglevel warning -y "
-    "-f rawvideo -vcodec rawvideo -pix_fmt bgr24 -s 640x480 -r 25 -i - "
-    "-an -c:v libx264 -preset ultrafast -tune zerolatency "
-    "-g 25 -x264-params keyint=25:scenecut=0 "
-//     "-pix_fmt yuv420p "
-    "-pix_fmt yuv420p output_test.mp4 "
-    "-fflags nobuffer -flags low_delay -max_delay 0 -flush_packets 1 "
-    "-f mpegts udp://0.0.0.0:1234?pkt_size=1316";
-
-  FILE* ffmpeg_pipe = popen(ffmpeg_cmd.c_str(), "w");
-  if (!ffmpeg_pipe) {
-    std::cerr << "Error: Cannot open FFmpeg pipe" << std::endl;
-    return;
-  }
-  std::cout << "FFmpeg pipe opened successfully" << std::endl;
-
-  int counter = 0;
-  size_t current_stream = 0;
-  auto last_switch_time = std::chrono::steady_clock::now();
-
-  while (running) {
-    std::cout << "running .. " << std::endl; 
-    std::pair<int, cv::Mat> data;
-    bool has_frame = false;
-    {
-      std::lock_guard<std::mutex> lock(queue_mutex);
-      if (!frame_queue.empty()) {
-        data = frame_queue.front();
-        frame_queue.pop();
-        has_frame = true;
-      }
-    }
-
-    if (!has_frame) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      continue;
-    }
-
-    auto now = std::chrono::steady_clock::now();
-    double elapsed = std::chrono::duration<double>(now - last_switch_time).count();
-    if (elapsed >= DISPLAY_TIME) {
-      current_stream = (current_stream + 1) % NUM_STREAMS;
-      last_switch_time = now;
-    }
-
-    if (data.first != current_stream) continue;
-
-    cv::Mat frame = data.second;
-
-    if (counter++ % YOLO_PROCESS_INTERVAL != 0) continue;
-
-    image darknet_img = make_image(frame.cols, frame.rows, 3);
-    for (int y = 0; y < frame.rows; ++y) {
-      for (int x = 0; x < frame.cols; ++x) {
-        cv::Vec3b p = frame.at<cv::Vec3b>(y, x);
-        darknet_img.data[x + y*frame.cols + 0*frame.cols*frame.rows] = p[2]/255.0f;
-        darknet_img.data[x + y*frame.cols + 1*frame.cols*frame.rows] = p[1]/255.0f;
-        darknet_img.data[x + y*frame.cols + 2*frame.cols*frame.rows] = p[0]/255.0f;
-      }
-    }
-
-    image sized = letterbox_image(darknet_img, net->w, net->h);
-    network_predict_ptr(net, sized.data);
-
-    int nboxes = 0;
-    detection* dets = get_network_boxes(net, frame.cols, frame.rows, CONF_THRESHOLD, CONF_THRESHOLD, nullptr, 1, &nboxes, 1);
-    if (dets) {
-      do_nms_sort(dets, nboxes, num_classes, NMS_THRESHOLD);
-      for (int i = 0; i < nboxes; ++i) {
-        for (int j = 0; j < num_classes; ++j) {
-          if (dets[i].prob[j] > CONF_THRESHOLD) {
-            box b = dets[i].bbox;
-            int x = (b.x - b.w/2) * frame.cols;
-            int y = (b.y - b.h/2) * frame.rows;
-            int w = b.w * frame.cols;
-            int h = b.h * frame.rows;
-            printf("(%d, %d, %d, %d)", x, y, w, h); 
-            cv::rectangle(frame, cv::Rect(x,y,w,h), cv::Scalar(0,255,0), 2);
-            std::string label = std::string(class_names[j]) + ":" + std::to_string(dets[i].prob[j]).substr(0,4);
-            cv::putText(frame, label, cv::Point(x,y-5), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0,0,255), 2);
-          }
-        }
-      }
-      free_detections(dets, nboxes);
-    }
-
-    free_image(darknet_img);
-    free_image(sized);
-
-    cv::Mat output;
-    resize(frame, output, cv::Size(640,480));
-    fwrite(output.data, 1, output.total() * output.elemSize(), ffmpeg_pipe);
-    fflush(ffmpeg_pipe);
-  } // while(running)
-
-  pclose(ffmpeg_pipe);
-} // void processYOLO
-
-
-
 
 void create_anchor_centers(
   float** anchor_centers_x,
@@ -1008,6 +906,78 @@ void printAllEmbeddings(sqlite3* db) {
 }
 
 
+void processYOLO(network* net, char** class_names, int num_classes, FaceApp& face_app) {
+  std::string ffmpeg_cmd =
+    "ffmpeg -hide_banner -loglevel warning -y "
+    "-f rawvideo -vcodec rawvideo -pix_fmt bgr24 -s 640x480 -r 25 -i - "
+    "-an -c:v libx264 -preset ultrafast -tune zerolatency "
+    "-g 25 -x264-params keyint=25:scenecut=0 "
+//     "-pix_fmt yuv420p "
+    "-pix_fmt yuv420p output_test.mp4 "
+    "-fflags nobuffer -flags low_delay -max_delay 0 -flush_packets 1 "
+    "-f mpegts udp://0.0.0.0:1234?pkt_size=1316";
+
+  FILE* ffmpeg_pipe = popen(ffmpeg_cmd.c_str(), "w");
+  if (!ffmpeg_pipe) {
+    std::cerr << "Error: Cannot open FFmpeg pipe" << std::endl;
+    return;
+  }
+  std::cout << "FFmpeg pipe opened successfully" << std::endl;
+
+  int counter = 0;
+  size_t current_stream = 0;
+  auto last_switch_time = std::chrono::steady_clock::now();
+
+  while (running) {
+    std::cout << counter << " .. " << std::endl; 
+    std::pair<int, cv::Mat> data;
+    bool has_frame = false;
+    {
+      std::lock_guard<std::mutex> lock(queue_mutex);
+      if (!frame_queue.empty()) {
+        data = frame_queue.front();
+        frame_queue.pop();
+        has_frame = true;
+      }
+    }
+
+    if (!has_frame) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      continue;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    double elapsed = std::chrono::duration<double>(now - last_switch_time).count();
+    if (elapsed >= DISPLAY_TIME) {
+      current_stream = (current_stream + 1) % NUM_STREAMS;
+      last_switch_time = now;
+    }
+
+    if (data.first != current_stream) continue;
+
+    cv::Mat frame = data.second;
+
+    if (counter++ % YOLO_PROCESS_INTERVAL != 0) continue;
+
+    // main process 
+    std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result = face_app.getEmbeddings(frame); 
+    std::vector<std::vector<float>> embeddings = result.first; 
+    std::vector<std::pair<bool,int>> sex = result.second; 
+
+    for (uint32_t i = 0; i < embeddings.size(); ++i) { 
+      printf("%d\t%d\t", sex[i].first, sex[i].second); 
+      vec::print(embeddings[i]); 
+    }
+
+    cv::Mat output;
+    resize(frame, output, cv::Size(640,480));
+    fwrite(output.data, 1, output.total() * output.elemSize(), ffmpeg_pipe);
+    fflush(ffmpeg_pipe);
+  } // while(running)
+
+  pclose(ffmpeg_pipe);
+} // void processYOLO
+
 
 int main(int argc, char* argv[]) {
 
@@ -1082,7 +1052,7 @@ int main(int argc, char* argv[]) {
         threads.emplace_back(captureStream, i, STREAM_URLS[i]);
       }
 
-      std::thread yolo_thread(processYOLO, net, class_names, class_list.size());
+      std::thread yolo_thread(processYOLO, net, class_names, class_list.size(), std::ref(face_app));
 
       std::cout << "Streaming started... Press Ctrl+C to stop." << std::endl;
       for (auto &t : threads) t.join();
@@ -1114,9 +1084,6 @@ int main(int argc, char* argv[]) {
           printf("%d\t%d\t", sex[i].first, sex[i].second); 
           vec::print(embeddings[i]); 
         }
-
-        cv::Size targetSize(640, 480);
-        cv::resize(img, img, targetSize);
 
         // Insert a new embedding
         std::string vec_str = vectorToString(embeddings[0]);
