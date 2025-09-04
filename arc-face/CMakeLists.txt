@@ -4,18 +4,22 @@ project(core)
 set(CMAKE_CXX_STANDARD 17)
 
 #set(ONNXRUNTIME_DIR "/home/ehsan/main/projects/onnxruntime-1.17.3/")
-set(ONNXRUNTIME_DIR "${CMAKE_SOURCE_DIR}/onnxruntime-linux-x64-gpu-1.17.0/")
-
+set(ONNXRUNTIME_DIR "${CMAKE_SOURCE_DIR}/onnxruntime-linux-x64-gpu-1.17.3/")
 
 include_directories(${ONNXRUNTIME_DIR}/include)
 include_directories(${ONNXRUNTIME_DIR}/include/core/providers/cuda)
 #include_directories(${ONNXRUNTIME_DIR}/include/onnxruntime/core/session)
 link_directories(${ONNXRUNTIME_DIR}/lib)
-include_directories("/app/projects/torcpp/include")
+include_directories("/app/torcpp/include")
 
 # Find OpenCV
 find_package(OpenCV REQUIRED)
 include_directories(${OpenCV_INCLUDE_DIRS})
+
+# Find DarkNet 
+set(DARKNET_PATH /app/hekfa-tech/arc-face/darknet)        
+set(DARKNET_BUILD_PATH ${DARKNET_PATH}/build)
+include_directories(${DARKNET_PATH}/include)
 
 # Find SQLite3
 find_package(SQLite3 REQUIRED)
@@ -25,6 +29,7 @@ add_executable(core ${CMAKE_CURRENT_LIST_DIR}/src/core.cpp)
 target_link_libraries(core
   onnxruntime
   ${OpenCV_LIBS}
+  ${DARKNET_BUILD_PATH}/libdarknet.so
   ${ONNXRUNTIME_DIR}/lib/libonnxruntime.so
   ${SQLite3_LIBRARIES}
 )
