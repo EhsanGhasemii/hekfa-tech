@@ -22,12 +22,14 @@ extern "C" {
 
 
 // YOLO settings
-const std::string CFG_FILE = "/app/hekfa-tech/arc-face/yolo/yolov3.cfg";
-const std::string WEIGHTS_FILE = "/app/hekfa-tech/arc-face/yolo/yolov3.weights";
-const std::string NAMES_FILE = "/app/hekfa-tech/arc-face/yolo/coco.names";
+const std::string CFG_FILE = "/root/.insightface/models/yolo/yolov3.cfg";
+const std::string WEIGHTS_FILE = "/root/.insightface/models/yolo/yolov3.weights";
+const std::string NAMES_FILE = "/root/.insightface/models/yolo/coco.names";
 const float CONF_THRESHOLD = 0.5;
 const float NMS_THRESHOLD = 0.4;
-const std::string CONFIG_FILE = "/app/hekfa-tech/arc-face/yolo/source.txt";
+const std::string CONFIG_FILE = "/root/.insightface/models/yolo/source.txt";
+const int IMG_FRAME_NUM = 1000; 
+const float COSINE_THR = 0.30;
 
 size_t NUM_STREAMS = 0;
 cv::Size FRAME_SIZE;
@@ -69,26 +71,110 @@ bool readConfig() {
   return NUM_STREAMS > 0 && width > 0 && height > 0 && STREAM_URLS.size() == NUM_STREAMS;
 } // bool readConfig()
 
-void captureStream(int idx, const std::string& url) {
-  cv::VideoCapture cap(url);
-  if (!cap.isOpened()) {
-    std::cerr << "Cannot open stream " << idx << " : " << url << std::endl;
-    return;
-  }
-
-  cap.set(cv::CAP_PROP_BUFFERSIZE, 3);
-
-  while (running) {
-    cv::Mat frame;
-    if (cap.read(frame) && !frame.empty()) {
-      cv::resize(frame, frame, FRAME_SIZE);
-      std::lock_guard<std::mutex> lock(queue_mutex);
-      frame_queue.push({idx, frame.clone()});
+// function to check input file is an image or not
+bool isImage(const std::string& filename) {
+    std::string ext;
+    size_t pos = filename.find_last_of(".");
+    if (pos != std::string::npos) {
+        ext = filename.substr(pos + 1);
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
-  cap.release();
+
+    return (ext == "jpg"   || ext == "jpeg" || ext == "png" || 
+            ext == "bmp"   || ext == "tiff" || ext == "gif" ||
+            ext == "pjpeg" || ext == "webp");
+}
+
+// function to check input file is an image or not
+bool isDB(const std::string& filename) {
+    std::string ext;
+    size_t pos = filename.find_last_of(".");
+    if (pos != std::string::npos) {
+        ext = filename.substr(pos + 1);
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    }
+
+    return (ext == "db");
+}
+
+// function to check input file is a video or not
+bool isVideo(const std::string& filename) {
+    std::string ext;
+    size_t pos = filename.find_last_of(".");
+    if (pos != std::string::npos) {
+        ext = filename.substr(pos + 1);
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    }
+
+    return (ext == "mp4" || ext == "avi" || ext == "mkv" || 
+            ext == "mov" || ext == "flv" || ext == "wmv");
+}
+
+
+void captureStream(int idx, const std::string& url) {
+  if (isVideo(url)) { 
+    std::cout << "url: " << url << std::endl; 
+    cv::VideoCapture cap(url);
+    if (!cap.isOpened()) {
+      std::cerr << "Cannot open stream " << idx << " : " << url << std::endl;
+      return;
+    }
+
+    cap.set(cv::CAP_PROP_BUFFERSIZE, 3);
+
+    while (running) {
+      cv::Mat frame;
+      if (cap.read(frame) && !frame.empty()) {
+        cv::resize(frame, frame, FRAME_SIZE);
+        std::lock_guard<std::mutex> lock(queue_mutex);
+        frame_queue.push({idx, frame.clone()});
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    cap.release();
+  } // if (isVideo(url))
+
+  else if (isImage(url)) { 
+    cv::Mat img = cv::imread(url);
+    for (uint32_t i = 0; i < IMG_FRAME_NUM; ++i) { 
+      if (!img.empty()) { 
+        cv::resize(img, img, FRAME_SIZE);
+        std::lock_guard<std::mutex> lock(queue_mutex);
+        frame_queue.push({idx, img});
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  } // else if (isImage(url))
+
+  else {
+      std::cerr << "Cannot open stream " << idx << " : " << url << std::endl;
+      return; 
+  } // else
 } // void captureStream
+
+
+void captureStreams(int idx, const std::string& url, const std::string& url2) {
+  if (isImage(url) && isImage(url2)) { 
+    cv::Mat img  = cv::imread(url);
+    cv::Mat img2 = cv::imread(url2);
+    for (uint32_t i = 0; i < IMG_FRAME_NUM; ++i) { 
+      if (!img.empty()) { 
+        cv::Mat hcat; 
+        cv::resize(img, img, FRAME_SIZE);
+        cv::resize(img2, img2, FRAME_SIZE);
+        cv::hconcat(img, img2, hcat); 
+        std::lock_guard<std::mutex> lock(queue_mutex);
+        frame_queue.push({idx, hcat});
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  } // else if (isImage(url))
+
+  else {
+      std::cerr << "Cannot open stream" << idx << ": " << url << ", " << url2 << std::endl;
+      return; 
+  } // else
+} // void captureStreams
 
 
 void create_anchor_centers(
@@ -304,45 +390,6 @@ cv::Mat arcface_dst = (cv::Mat_<float>(5, 2) <<
     41.5493f, 92.3655f,
     70.7299f, 92.2041f
 );
-
-// function to check input file is an image or not
-bool isImage(const std::string& filename) {
-    std::string ext;
-    size_t pos = filename.find_last_of(".");
-    if (pos != std::string::npos) {
-        ext = filename.substr(pos + 1);
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    }
-
-    return (ext == "jpg"   || ext == "jpeg" || ext == "png" || 
-            ext == "bmp"   || ext == "tiff" || ext == "gif" ||
-            ext == "pjpeg" || ext == "webp");
-}
-
-// function to check input file is an image or not
-bool isDB(const std::string& filename) {
-    std::string ext;
-    size_t pos = filename.find_last_of(".");
-    if (pos != std::string::npos) {
-        ext = filename.substr(pos + 1);
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    }
-
-    return (ext == "db");
-}
-
-// function to check input file is a video or not
-bool isVideo(const std::string& filename) {
-    std::string ext;
-    size_t pos = filename.find_last_of(".");
-    if (pos != std::string::npos) {
-        ext = filename.substr(pos + 1);
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    }
-
-    return (ext == "mp4" || ext == "avi" || ext == "mkv" || 
-            ext == "mov" || ext == "flv" || ext == "wmv");
-}
 
 // trnasform
 std::pair<cv::Mat, cv::Mat> transform(
@@ -980,6 +1027,103 @@ void processYOLO(network* net, char** class_names, int num_classes, FaceApp& fac
 } // void processYOLO
 
 
+
+void processYOLO2(network* net, char** class_names, int num_classes, FaceApp& face_app) {
+  std::string ffmpeg_cmd =
+    "ffmpeg -hide_banner -loglevel warning -y "
+    "-f rawvideo -vcodec rawvideo -pix_fmt bgr24 -s 640x480 -r 25 -i - "
+    "-an -c:v libx264 -preset ultrafast -tune zerolatency "
+    "-g 25 -x264-params keyint=25:scenecut=0 "
+//     "-pix_fmt yuv420p "
+    "-pix_fmt yuv420p output_test.mp4 "
+    "-fflags nobuffer -flags low_delay -max_delay 0 -flush_packets 1 "
+    "-f mpegts udp://0.0.0.0:1234?pkt_size=1316";
+
+  FILE* ffmpeg_pipe = popen(ffmpeg_cmd.c_str(), "w");
+  if (!ffmpeg_pipe) {
+    std::cerr << "Error: Cannot open FFmpeg pipe" << std::endl;
+    return;
+  }
+  std::cout << "FFmpeg pipe opened successfully" << std::endl;
+
+  int counter = 0;
+  size_t current_stream = 0;
+  auto last_switch_time = std::chrono::steady_clock::now();
+
+  while (running) {
+    std::cout << counter << " .. " << std::endl; 
+    std::pair<int, cv::Mat> data;
+    bool has_frame = false;
+    {
+      std::lock_guard<std::mutex> lock(queue_mutex);
+      if (!frame_queue.empty()) {
+        data = frame_queue.front();
+        frame_queue.pop();
+        has_frame = true;
+      }
+    }
+
+    if (!has_frame) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      continue;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    double elapsed = std::chrono::duration<double>(now - last_switch_time).count();
+    if (elapsed >= DISPLAY_TIME) {
+      current_stream = (current_stream + 1) % NUM_STREAMS;
+      last_switch_time = now;
+    }
+
+    if (data.first != current_stream) continue;
+
+    cv::Mat frame = data.second;
+
+    if (counter++ % YOLO_PROCESS_INTERVAL != 0) continue;
+
+    // main process 
+    std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result = face_app.getEmbeddings(frame); 
+    std::vector<std::vector<float>> embeddings = result.first; 
+    std::vector<std::pair<bool,int>> sex = result.second; 
+
+    for (uint32_t i = 0; i < embeddings.size(); ++i) { 
+      printf("%d\t%d\t", sex[i].first, sex[i].second); 
+      vec::print(embeddings[i]); 
+    }
+
+    float sim = cosine_similarity(result.first[0], result.first[1]); 
+    std::cout << "Similarity: " << sim << std::endl; 
+
+    cv::Scalar color;
+    std::string text;
+    if (sim > COSINE_THR) { 
+      color = cv::Scalar(0, 255, 0);
+      text = "Same person"; 
+    } 
+    else {
+      color = cv::Scalar(0, 0, 255);
+      text = "Not Same person"; 
+    } 
+
+    cv::Mat output;
+    resize(frame, output, cv::Size(640,480));
+
+    // Put the text
+      cv::putText(output, text, cv::Point(160, 240),
+                cv::FONT_HERSHEY_SIMPLEX, // font face
+                1.0,                      // font scale
+                color,                    // color (B,G,R) → white
+                2);                       // thickness
+
+    fwrite(output.data, 1, output.total() * output.elemSize(), ffmpeg_pipe);
+    fflush(ffmpeg_pipe);
+  } // while(running)
+
+  pclose(ffmpeg_pipe);
+} // void processYOLO2
+
+
+
 int main(int argc, char* argv[]) {
 
     sqlite3* db;
@@ -1020,6 +1164,31 @@ int main(int argc, char* argv[]) {
       /* const bool device=false                    */ 1
     ); 
 
+    // create a dark net 
+    if (!fileExists(CFG_FILE) || !fileExists(WEIGHTS_FILE) || !fileExists(NAMES_FILE)) {
+      std::cerr << "Missing YOLO model files!" << std::endl;
+      return -1;
+    }
+    if (!readConfig()) {
+      std::cerr << "Failed to read source.txt config!" << std::endl;
+      return -1;
+    }
+
+    network* net = load_network((char*)CFG_FILE.c_str(), (char*)WEIGHTS_FILE.c_str(), 0);
+    set_batch_network(net, 1);
+
+    std::vector<std::string> class_list;
+    std::ifstream names_file(NAMES_FILE);
+    std::string name;
+    while (getline(names_file, name)) class_list.push_back(name);
+    names_file.close();
+
+    char** class_names = (char**)calloc(class_list.size(), sizeof(char*));
+    for (size_t i=0; i<class_list.size(); ++i) {
+        class_names[i] = (char*)calloc(class_list[i].size()+1,sizeof(char));
+        strcpy(class_names[i], class_list[i].c_str());
+    }
+
     // main branch to decide what to process in which mode
     vec::draw_line(); 
     try {
@@ -1032,7 +1201,6 @@ int main(int argc, char* argv[]) {
               cxxopts::value<std::vector<std::string>>())
           ("h,help", "Print usage");
 
-//       options.parse_positional({"i"});  
       options.parse_positional({"mode", "input"});
 
       auto result = options.parse(argc, argv);
@@ -1072,30 +1240,6 @@ int main(int argc, char* argv[]) {
         } // if (inputs.size() > 2)
 
         else if (inputs.empty()) { 
-          if (!fileExists(CFG_FILE) || !fileExists(WEIGHTS_FILE) || !fileExists(NAMES_FILE)) {
-            std::cerr << "Missing YOLO model files!" << std::endl;
-            return -1;
-          }
-
-          if (!readConfig()) {
-            std::cerr << "Failed to read source.txt config!" << std::endl;
-            return -1;
-          }
-
-          network* net = load_network((char*)CFG_FILE.c_str(), (char*)WEIGHTS_FILE.c_str(), 0);
-          set_batch_network(net, 1);
-
-          std::vector<std::string> class_list;
-          std::ifstream names_file(NAMES_FILE);
-          std::string name;
-          while (getline(names_file, name)) class_list.push_back(name);
-          names_file.close();
-
-          char** class_names = (char**)calloc(class_list.size(), sizeof(char*));
-          for (size_t i=0; i<class_list.size(); ++i) {
-              class_names[i] = (char*)calloc(class_list[i].size()+1,sizeof(char));
-              strcpy(class_names[i], class_list[i].c_str());
-          }
 
           std::vector<std::thread> threads;
           for (size_t i=0; i<NUM_STREAMS; ++i) { 
@@ -1108,9 +1252,6 @@ int main(int argc, char* argv[]) {
           for (auto &t : threads) t.join();
           yolo_thread.join();
 
-          free_network_ptr(net);
-          for (size_t i=0; i<class_list.size(); ++i) free(class_names[i]);
-          free(class_names);
         } // else if (inputs.empty())
 
         else if (inputs.size() == 1) {
@@ -1118,81 +1259,32 @@ int main(int argc, char* argv[]) {
           // extract image file name
           std::string input_file = inputs[0]; 
 
-          // Extracting embeddings of an image input file
-          if (isImage(input_file)) { 
-            std::cout << "Processing an image input file ... ." << std::endl; 
+          std::cout << "Processing an image input file ... ." << std::endl; 
 
-            // Load image
-            cv::Mat img = cv::imread(input_file);
+          std::vector<std::thread> threads;
+          threads.emplace_back(captureStream, 0, input_file);
 
-            std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result = face_app.getEmbeddings(img); 
-            std::vector<std::vector<float>> embeddings = result.first; 
-            std::vector<std::pair<bool,int>> sex = result.second; 
+          std::thread yolo_thread(processYOLO, net, class_names, class_list.size(), std::ref(face_app));
 
-            for (uint32_t i = 0; i < embeddings.size(); ++i) { 
-              printf("%d\t%d\t", sex[i].first, sex[i].second); 
-              vec::print(embeddings[i]); 
-            }
+          std::cout << "Streaming started... Press Ctrl+C to stop." << std::endl;
+          for (auto &t : threads) t.join();
+          yolo_thread.join();
 
-            // Insert a new embedding
-            std::string vec_str = vectorToString(embeddings[0]);
-            std::string label = "person_001";
-
-            std::string insert_sql =
-                "INSERT INTO embeddings (label, vector) VALUES ('" +
-                label + "', '" + vec_str + "');";
-
-            if (sqlite3_exec(db, insert_sql.c_str(), nullptr, nullptr, &errMsg) != SQLITE_OK) {
-                std::cerr << "Error inserting data: " << errMsg << "\n";
-                sqlite3_free(errMsg);
-            } else {
-                std::cout << "Inserted new embedding for: " << label << "\n";
-            }
-            return 1; 
-          } // if (isImage(input_file))
-
-          // Extracting embeddings of a video input file
-          else if (isVideo(input_file)) { 
-
-            std::cout << "Processing a video input file ... ." << std::endl; 
-
-            // Load Video
-            std::cout << "input_file: " << input_file << std::endl; 
-            cv::VideoCapture cap(input_file);
-
-            uint32_t i = 0; 
-
-            while (1) {
-              std::cout << "i: " << i << std::endl; 
-
-              // create a frame
-              cv::Mat frame;
-              cap >> frame;
-              if (frame.empty()) { 
-                break;
-              } // if (frame.empty())
-
-              // main core
-              std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result = face_app.getEmbeddings(frame); 
-              std::vector<std::vector<float>> embeddings = result.first; 
-              std::vector<std::pair<bool,int>> sex = result.second; 
-
-              // print results
-              printf("%d\t%d\t", sex[0].first, sex[0].second); 
-              vec::print(embeddings[0]); 
-
-              i++; 
-            } // while
-
-            cap.release();
-
-            return 1; 
-          } // else if (isVideo(input_file))
-
-          else {
-            std::cout << "Unknown or unsupported file format: " << input_file << std::endl; 
-            return 1; 
-          } // else after detecting image or video
+//             // Insert a new embedding
+//             std::string vec_str = vectorToString(embeddings[0]);
+//             std::string label = "person_001";
+// 
+//             std::string insert_sql =
+//                 "INSERT INTO embeddings (label, vector) VALUES ('" +
+//                 label + "', '" + vec_str + "');";
+// 
+//             if (sqlite3_exec(db, insert_sql.c_str(), nullptr, nullptr, &errMsg) != SQLITE_OK) {
+//                 std::cerr << "Error inserting data: " << errMsg << "\n";
+//                 sqlite3_free(errMsg);
+//             } else {
+//                 std::cout << "Inserted new embedding for: " << label << "\n";
+//             }
+          return 1; 
         } // else if (inputs.size() == 1)
 
         else if (inputs.size() == 2) { 
@@ -1200,26 +1292,18 @@ int main(int argc, char* argv[]) {
           std::string input_file = inputs[0]; 
           std::string input_file2 = inputs[1]; 
 
-          // Extracting embeddings of an image input file
-          if (isImage(input_file) && isImage(input_file2)) { 
-            std::cout << "Compairing two image input files ... ." << std::endl; 
+          std::cout << "Compairing two image input files ... ." << std::endl; 
 
-            // Load image
-            cv::Mat img  = cv::imread(input_file );
-            cv::Mat img2 = cv::imread(input_file2);
+          std::vector<std::thread> threads;
+          threads.emplace_back(captureStreams, 0, input_file, input_file2);
 
-            std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result  = face_app.getEmbeddings(img ); 
-            std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result2 = face_app.getEmbeddings(img2); 
+          std::thread yolo_thread(processYOLO2, net, class_names, class_list.size(), std::ref(face_app));
 
-            float sim = cosine_similarity(result.first[0], result2.first[0]); 
-            std::cout << "Similarity: " << sim << std::endl; 
+          std::cout << "Streaming started... Press Ctrl+C to stop." << std::endl;
+          for (auto &t : threads) t.join();
+          yolo_thread.join();
 
-            cv::Size targetSize(640, 480);
-            cv::resize(img, img, targetSize);
-            cv::resize(img2, img2, targetSize);
-
-            return 1; 
-          } // if (isImage(input_file))
+          return 1; 
         } // else if (inputs.size() == 2)
       } // else if (mode == "f")
 
@@ -1236,6 +1320,11 @@ int main(int argc, char* argv[]) {
 
     // Close DB
     sqlite3_close(db);
+
+    // free the dark net
+    free_network_ptr(net);
+    for (size_t i=0; i<class_list.size(); ++i) free(class_names[i]);
+    free(class_names);
 
     return 0;
 }
