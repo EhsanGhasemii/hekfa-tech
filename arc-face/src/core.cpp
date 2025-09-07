@@ -18,6 +18,7 @@ extern "C" {
 }
 
 #include "vector.h"             // library to print our matrices
+#include "cxxopts.hpp"
 
 
 // YOLO settings
@@ -1019,166 +1020,219 @@ int main(int argc, char* argv[]) {
       /* const bool device=false                    */ 1
     ); 
 
+    // main branch to decide what to process in which mode
     vec::draw_line(); 
-    if (argc == 1) { 
+    try {
+      cxxopts::Options options("MyApp", "Process objects or faces from image/video");
 
-      if (!fileExists(CFG_FILE) || !fileExists(WEIGHTS_FILE) || !fileExists(NAMES_FILE)) {
-        std::cerr << "Missing YOLO model files!" << std::endl;
-        return -1;
+      options.add_options()
+          ("m,mode", "Mode: 'p' for person, 'c' for car",
+              cxxopts::value<std::string>())
+          ("i,input", "Input file(s) including image or video",
+              cxxopts::value<std::vector<std::string>>())
+          ("h,help", "Print usage");
+
+//       options.parse_positional({"i"});  
+      options.parse_positional({"mode", "input"});
+
+      auto result = options.parse(argc, argv);
+
+      if (result.count("help") || argc == 1) {
+        std::cout << "Usage:\n"
+          << "  ./test o image.jpg          # Object mode, 1 input\n"
+          << "  ./test f face1.jpg          # Face mode, 1 input\n"
+          << "  ./test f face1.jpg face2.jpg # Face mode, 2 inputs\n\n";
+        std::cout << options.help() << std::endl;
+        return 0;
       }
 
-      if (!readConfig()) {
-        std::cerr << "Failed to read source.txt config!" << std::endl;
-        return -1;
+      if (!result.count("mode")) {
+          std::cerr << "Error: --mode is required." << std::endl;
+          return 1;
       }
 
-      network* net = load_network((char*)CFG_FILE.c_str(), (char*)WEIGHTS_FILE.c_str(), 0);
-      set_batch_network(net, 1);
-
-      std::vector<std::string> class_list;
-      std::ifstream names_file(NAMES_FILE);
-      std::string name;
-      while (getline(names_file, name)) class_list.push_back(name);
-      names_file.close();
-
-      char** class_names = (char**)calloc(class_list.size(), sizeof(char*));
-      for (size_t i=0; i<class_list.size(); ++i) {
-          class_names[i] = (char*)calloc(class_list[i].size()+1,sizeof(char));
-          strcpy(class_names[i], class_list[i].c_str());
+      std::string mode = result["mode"].as<std::string>();
+      std::vector<std::string> inputs;
+      if (result.count("input")) {
+          inputs = result["input"].as<std::vector<std::string>>();
       }
 
-      std::vector<std::thread> threads;
-      for (size_t i=0; i<NUM_STREAMS; ++i) { 
-        threads.emplace_back(captureStream, i, STREAM_URLS[i]);
+      if (mode == "o") {
+          if (inputs.size() != 1) {
+              std::cerr << "Object mode requires exactly 1 input file." << std::endl;
+              return 1;
+          }
+          std::cout << "Running object detection on: " << inputs[0] << std::endl;
       }
 
-      std::thread yolo_thread(processYOLO, net, class_names, class_list.size(), std::ref(face_app));
+      else if (mode == "f") {
+        if (inputs.size() > 2) {
+          std::cerr << "Face mode requires 1 or 2 input files." << std::endl;
+          return 1;
+        } // if (inputs.size() > 2)
 
-      std::cout << "Streaming started... Press Ctrl+C to stop." << std::endl;
-      for (auto &t : threads) t.join();
-      yolo_thread.join();
+        else if (inputs.empty()) { 
+          if (!fileExists(CFG_FILE) || !fileExists(WEIGHTS_FILE) || !fileExists(NAMES_FILE)) {
+            std::cerr << "Missing YOLO model files!" << std::endl;
+            return -1;
+          }
 
-      free_network_ptr(net);
-      for (size_t i=0; i<class_list.size(); ++i) free(class_names[i]);
-      free(class_names);
+          if (!readConfig()) {
+            std::cerr << "Failed to read source.txt config!" << std::endl;
+            return -1;
+          }
 
-    } // if (argc == 1)
+          network* net = load_network((char*)CFG_FILE.c_str(), (char*)WEIGHTS_FILE.c_str(), 0);
+          set_batch_network(net, 1);
 
-    else if (argc == 2) { 
-    
-      // extract image file name
-      std::string input_file = argv[1]; 
+          std::vector<std::string> class_list;
+          std::ifstream names_file(NAMES_FILE);
+          std::string name;
+          while (getline(names_file, name)) class_list.push_back(name);
+          names_file.close();
 
-      // Extracting embeddings of an image input file
-      if (isImage(input_file)) { 
-        std::cout << "Processing an image input file ... ." << std::endl; 
+          char** class_names = (char**)calloc(class_list.size(), sizeof(char*));
+          for (size_t i=0; i<class_list.size(); ++i) {
+              class_names[i] = (char*)calloc(class_list[i].size()+1,sizeof(char));
+              strcpy(class_names[i], class_list[i].c_str());
+          }
 
-        // Load image
-        cv::Mat img = cv::imread(input_file);
+          std::vector<std::thread> threads;
+          for (size_t i=0; i<NUM_STREAMS; ++i) { 
+            threads.emplace_back(captureStream, i, STREAM_URLS[i]);
+          }
 
-        std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result = face_app.getEmbeddings(img); 
-        std::vector<std::vector<float>> embeddings = result.first; 
-        std::vector<std::pair<bool,int>> sex = result.second; 
+          std::thread yolo_thread(processYOLO, net, class_names, class_list.size(), std::ref(face_app));
 
-        for (uint32_t i = 0; i < embeddings.size(); ++i) { 
-          printf("%d\t%d\t", sex[i].first, sex[i].second); 
-          vec::print(embeddings[i]); 
-        }
+          std::cout << "Streaming started... Press Ctrl+C to stop." << std::endl;
+          for (auto &t : threads) t.join();
+          yolo_thread.join();
 
-        // Insert a new embedding
-        std::string vec_str = vectorToString(embeddings[0]);
-        std::string label = "person_001";
+          free_network_ptr(net);
+          for (size_t i=0; i<class_list.size(); ++i) free(class_names[i]);
+          free(class_names);
+        } // else if (inputs.empty())
 
-        std::string insert_sql =
-            "INSERT INTO embeddings (label, vector) VALUES ('" +
-            label + "', '" + vec_str + "');";
+        else if (inputs.size() == 1) {
+          
+          // extract image file name
+          std::string input_file = inputs[0]; 
 
-        if (sqlite3_exec(db, insert_sql.c_str(), nullptr, nullptr, &errMsg) != SQLITE_OK) {
-            std::cerr << "Error inserting data: " << errMsg << "\n";
-            sqlite3_free(errMsg);
-        } else {
-            std::cout << "Inserted new embedding for: " << label << "\n";
-        }
-        return 1; 
-      } // if (isImage(input_file))
+          // Extracting embeddings of an image input file
+          if (isImage(input_file)) { 
+            std::cout << "Processing an image input file ... ." << std::endl; 
 
-      // Extracting embeddings of a video input file
-      else if (isVideo(input_file)) { 
+            // Load image
+            cv::Mat img = cv::imread(input_file);
 
-        std::cout << "Processing a video input file ... ." << std::endl; 
+            std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result = face_app.getEmbeddings(img); 
+            std::vector<std::vector<float>> embeddings = result.first; 
+            std::vector<std::pair<bool,int>> sex = result.second; 
 
-        // Load Video
-        std::cout << "input_file: " << input_file << std::endl; 
-        cv::VideoCapture cap(input_file);
+            for (uint32_t i = 0; i < embeddings.size(); ++i) { 
+              printf("%d\t%d\t", sex[i].first, sex[i].second); 
+              vec::print(embeddings[i]); 
+            }
 
-        uint32_t i = 0; 
+            // Insert a new embedding
+            std::string vec_str = vectorToString(embeddings[0]);
+            std::string label = "person_001";
 
-        while (1) {
-          std::cout << "i: " << i << std::endl; 
+            std::string insert_sql =
+                "INSERT INTO embeddings (label, vector) VALUES ('" +
+                label + "', '" + vec_str + "');";
 
-          // create a frame
-          cv::Mat frame;
-          cap >> frame;
-          if (frame.empty()) { 
-            break;
-          } // if (frame.empty())
+            if (sqlite3_exec(db, insert_sql.c_str(), nullptr, nullptr, &errMsg) != SQLITE_OK) {
+                std::cerr << "Error inserting data: " << errMsg << "\n";
+                sqlite3_free(errMsg);
+            } else {
+                std::cout << "Inserted new embedding for: " << label << "\n";
+            }
+            return 1; 
+          } // if (isImage(input_file))
 
-          // main core
-          std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result = face_app.getEmbeddings(frame); 
-          std::vector<std::vector<float>> embeddings = result.first; 
-          std::vector<std::pair<bool,int>> sex = result.second; 
+          // Extracting embeddings of a video input file
+          else if (isVideo(input_file)) { 
 
-          // print results
-          printf("%d\t%d\t", sex[0].first, sex[0].second); 
-          vec::print(embeddings[0]); 
+            std::cout << "Processing a video input file ... ." << std::endl; 
 
-          i++; 
-        } // while
+            // Load Video
+            std::cout << "input_file: " << input_file << std::endl; 
+            cv::VideoCapture cap(input_file);
 
-        cap.release();
+            uint32_t i = 0; 
 
-        return 1; 
-      } // else if (isVideo(input_file))
+            while (1) {
+              std::cout << "i: " << i << std::endl; 
+
+              // create a frame
+              cv::Mat frame;
+              cap >> frame;
+              if (frame.empty()) { 
+                break;
+              } // if (frame.empty())
+
+              // main core
+              std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result = face_app.getEmbeddings(frame); 
+              std::vector<std::vector<float>> embeddings = result.first; 
+              std::vector<std::pair<bool,int>> sex = result.second; 
+
+              // print results
+              printf("%d\t%d\t", sex[0].first, sex[0].second); 
+              vec::print(embeddings[0]); 
+
+              i++; 
+            } // while
+
+            cap.release();
+
+            return 1; 
+          } // else if (isVideo(input_file))
+
+          else {
+            std::cout << "Unknown or unsupported file format: " << input_file << std::endl; 
+            return 1; 
+          } // else after detecting image or video
+        } // else if (inputs.size() == 1)
+
+        else if (inputs.size() == 2) { 
+          // extract image file name
+          std::string input_file = inputs[0]; 
+          std::string input_file2 = inputs[1]; 
+
+          // Extracting embeddings of an image input file
+          if (isImage(input_file) && isImage(input_file2)) { 
+            std::cout << "Compairing two image input files ... ." << std::endl; 
+
+            // Load image
+            cv::Mat img  = cv::imread(input_file );
+            cv::Mat img2 = cv::imread(input_file2);
+
+            std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result  = face_app.getEmbeddings(img ); 
+            std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result2 = face_app.getEmbeddings(img2); 
+
+            float sim = cosine_similarity(result.first[0], result2.first[0]); 
+            std::cout << "Similarity: " << sim << std::endl; 
+
+            cv::Size targetSize(640, 480);
+            cv::resize(img, img, targetSize);
+            cv::resize(img2, img2, targetSize);
+
+            return 1; 
+          } // if (isImage(input_file))
+        } // else if (inputs.size() == 2)
+      } // else if (mode == "f")
 
       else {
-        std::cout << "Unknown or unsupported file format: " << input_file << std::endl; 
-        return 1; 
-      } // else after detecting image or video
-    } // if (argc == 2)
+          std::cerr << "ERROR) Invalid mode ... ." << std::endl;
+          return 1;
+      } // else to Invalid mode
 
-    else if (argc == 3) { 
-    
-      // extract image file name
-      std::string input_file = argv[1]; 
-      std::string input_file2 = argv[2]; 
+    } catch (const std::exception& e) {
+      std::cerr << "Error parsing options: " << e.what() << std::endl;
+      return 1;
+    }
 
-      // Extracting embeddings of an image input file
-      if (isImage(input_file) && isImage(input_file2)) { 
-        std::cout << "Compairing two image input files ... ." << std::endl; 
-
-        // Load image
-        cv::Mat img  = cv::imread(input_file );
-        cv::Mat img2 = cv::imread(input_file2);
-
-        std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result  = face_app.getEmbeddings(img ); 
-        std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result2 = face_app.getEmbeddings(img2); 
-
-        float sim = cosine_similarity(result.first[0], result2.first[0]); 
-        std::cout << "Similarity: " << sim << std::endl; 
-
-        cv::Size targetSize(640, 480);
-        cv::resize(img, img, targetSize);
-        cv::resize(img2, img2, targetSize);
-
-        return 1; 
-      } // if (isImage(input_file))
-
-    } // else if (argc == 3)
-
-    else if (argc > 3) { 
-      std::cerr << "Usage: " << argv[0] << " <input_file>\n"; 
-      return 1; 
-    } // if (argc > 3)
 
     // Close DB
     sqlite3_close(db);
