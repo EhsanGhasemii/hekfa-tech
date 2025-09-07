@@ -198,3 +198,11 @@ xhost +local:docker
 ./build/core video.mp4
 ```
 
+4. Send input videos/cameras via streaming mode.
+```bash
+./build/core
+```
+and also read the streaming file via below command. 
+```bash
+ffplay -fflags nobuffer -flags low_delay -framedrop -probesize 32 -analyzeduration 0 udp://127.0.0.1:1234
+```
