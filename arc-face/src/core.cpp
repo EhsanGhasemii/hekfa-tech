@@ -31,10 +31,10 @@ const std::string CONFIG_FILE = "/root/.insightface/models/yolo/source.txt";
 const int IMG_FRAME_NUM = 1000; 
 const float COSINE_THR = 0.30;
 
-size_t NUM_STREAMS = 0;
-cv::Size FRAME_SIZE;
-double DISPLAY_TIME = 5.0; 
-int YOLO_PROCESS_INTERVAL = 4;
+size_t NUM_STREAMS = 1;
+cv::Size FRAME_SIZE(800, 600);
+double DISPLAY_TIME = 2.0; 
+int YOLO_PROCESS_INTERVAL = 5;
 std::vector<std::string> STREAM_URLS;
 
 std::atomic<bool> running(true);
@@ -45,6 +45,23 @@ std::queue<std::pair<int, cv::Mat>> frame_queue;
 bool fileExists(const std::string& path) {
   std::ifstream file(path);
   return file.good();
+}
+
+// 
+std::string getTime() {
+    std::time_t now = std::time(nullptr);
+    std::tm* now_tm = std::localtime(&now);
+
+    // Add 03:56:17 to the current time
+    now_tm->tm_hour;// += 3;
+    now_tm->tm_min;// += 56;
+    now_tm->tm_sec;// += 17;
+    std::mktime(now_tm); // Normalize the time structure
+
+    char buffer[80];
+    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", now_tm);
+
+    return std::string(buffer);
 }
 
 bool readConfig() {
@@ -551,7 +568,10 @@ struct FaceApp {
       genderage_model  (genderage_model_path  , "GenderAge"  , device)
   {}
 
-  std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> getEmbeddings(
+  std::pair<std::pair<std::vector<std::vector<float>>, 
+                      std::vector<std::pair<bool,int>>>, 
+            std::vector<std::pair<std::pair<int, int>,
+                                  std::pair<int, int>>>> getEmbeddings(
     const cv::Mat& img
   ) { 
 
@@ -874,12 +894,15 @@ struct FaceApp {
 
 
     // draw rectangles for each faces
+    std::vector<std::pair<std::pair<int, int>, std::pair<int, int>>> locs; 
     for (const auto x: det) { 
       std::vector<float> bbox = x.second.first; 
       int x1 = static_cast<int>(bbox[0]); 
       int y1 = static_cast<int>(bbox[1]); 
       int x2 = static_cast<int>(bbox[2]); 
       int y2 = static_cast<int>(bbox[3]); 
+
+      locs.push_back({{x1, y1}, {x2, y2}}); 
 
       cv::rectangle(img,
                     cv::Point(x1, y1),
@@ -889,12 +912,7 @@ struct FaceApp {
 
     } // for (const auto x: det)
 
-
-
-
-
-
-    return {embeddings, gender_age}; 
+    return {{embeddings, gender_age}, locs}; 
   } // void getEmbeddings
 
 }; // struce FaceApp
@@ -930,22 +948,37 @@ std::vector<float> stringToVector(const std::string& str) {
 
 // Helper to print all records in the embeddings table
 void printAllEmbeddings(sqlite3* db) {
-    const char* select_sql = "SELECT id, label, vector FROM embeddings;";
+    const char* select_sql =
+        "SELECT id, name, date, vector, path, gender, age, semantics, camera FROM embeddings;";
     sqlite3_stmt* stmt;
 
     if (sqlite3_prepare_v2(db, select_sql, -1, &stmt, nullptr) == SQLITE_OK) {
         std::cout << "=== All records in DB ===\n";
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             int id = sqlite3_column_int(stmt, 0);
-            const unsigned char* lbl = sqlite3_column_text(stmt, 1);
-            const unsigned char* vec_txt = sqlite3_column_text(stmt, 2);
+
+            const unsigned char* name     = sqlite3_column_text(stmt, 1);
+            const unsigned char* date     = sqlite3_column_text(stmt, 2);
+            const unsigned char* vec_txt  = sqlite3_column_text(stmt, 3);
+            const unsigned char* path     = sqlite3_column_text(stmt, 4);
+            const unsigned char* gender   = sqlite3_column_text(stmt, 5);
+            int age                       = sqlite3_column_int(stmt, 6);
+            const unsigned char* semantics= sqlite3_column_text(stmt, 7);
+            const unsigned char* camera   = sqlite3_column_text(stmt, 8);
+
             std::string vec_str = (const char*)vec_txt;
             std::vector<float> vec = stringToVector(vec_str);
 
             std::cout << "ID: " << id
-                      << " | Label: " << lbl  
+                      << " | Name: " << (name ? (const char*)name : "")
+                      << " | Date: " << (date ? (const char*)date : "")
+                      << " | Path: " << (path ? (const char*)path : "")
+                      << " | Gender: " << (gender ? (const char*)gender : "")
+                      << " | Age: " << age
+                      << " | Semantics: " << (semantics ? (const char*)semantics : "")
+                      << " | Camera: " << (camera ? (const char*)camera : "")
                       << " | Vector: ";
-            vec::print(vec); 
+            vec::print(vec);
         }
         sqlite3_finalize(stmt);
     } else {
@@ -953,8 +986,83 @@ void printAllEmbeddings(sqlite3* db) {
     }
 }
 
+// Helper to insert into embeddings table with new schema
+int insertToEmbeddings(
+  sqlite3* db,
+  std::vector<float>& embdd,
+  const std::string& images_path, 
+  const std::string& image_gender, 
+  const int& image_age, 
+  char*& errMsg
+) {
+    int id = 0; 
+    const char* select_sql = "SELECT id, vector FROM embeddings;";
+    sqlite3_stmt* stmt;
 
-void processYOLO(network* net, char** class_names, int num_classes, FaceApp& face_app) {
+    // First check if similar embedding already exists
+    if (sqlite3_prepare_v2(db, select_sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            id = sqlite3_column_int(stmt, 0);
+            const unsigned char* vec_txt = sqlite3_column_text(stmt, 1); // "vector" column
+            std::string vec_str = (const char*)vec_txt;
+            std::vector<float> vec = stringToVector(vec_str);
+
+            float sim = cosine_similarity(embdd, vec);
+            if (sim > COSINE_THR) {
+                sqlite3_finalize(stmt);
+                return id; 
+            }
+        }
+        sqlite3_finalize(stmt);
+    } else {
+        std::cerr << "Error selecting data: " << sqlite3_errmsg(db) << "\n";
+        return -1;
+    }
+
+    // If not found, insert a new record
+    std::string vec_str = vectorToString(embdd);
+
+    const char* insert_sql =
+        "INSERT INTO embeddings "
+        "(name, date, vector, path, gender, age, semantics, camera) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?);";
+
+    sqlite3_stmt* insert_stmt;
+    if (sqlite3_prepare_v2(db, insert_sql, -1, &insert_stmt, nullptr) == SQLITE_OK) {
+        // Example values (replace with your actual metadata)
+        std::string name = "person_" + std::to_string(id + 1);
+        std::string date = getTime();  // could generate current date
+        std::string path = images_path + name + ".jpg";
+        std::string gender = image_gender;
+        int age = image_age;
+        std::string semantics = "Null";
+        std::string camera = "Canon";
+
+        sqlite3_bind_text(insert_stmt, 1, name.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(insert_stmt, 2, date.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(insert_stmt, 3, vec_str.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(insert_stmt, 4, path.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(insert_stmt, 5, gender.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(insert_stmt, 6, age);
+        sqlite3_bind_text(insert_stmt, 7, semantics.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(insert_stmt, 8, camera.c_str(), -1, SQLITE_TRANSIENT);
+
+        if (sqlite3_step(insert_stmt) != SQLITE_DONE) {
+            std::cerr << "Error inserting data: " << sqlite3_errmsg(db) << "\n";
+            return -1; 
+        } else {
+            std::cout << "Inserted new embedding for: " << name << "\n";
+            return id + 1; 
+        }
+        sqlite3_finalize(insert_stmt);
+    } else {
+        std::cerr << "Error preparing insert: " << sqlite3_errmsg(db) << "\n";
+        return -1; 
+    }
+}
+
+
+void processYOLO(network* net, char** class_names, int num_classes, FaceApp& face_app, sqlite3*& db, char*& errMsg) {
   std::string ffmpeg_cmd =
     "ffmpeg -hide_banner -loglevel warning -y "
     "-f rawvideo -vcodec rawvideo -pix_fmt bgr24 -s 640x480 -r 25 -i - "
@@ -1008,13 +1116,49 @@ void processYOLO(network* net, char** class_names, int num_classes, FaceApp& fac
     if (counter++ % YOLO_PROCESS_INTERVAL != 0) continue;
 
     // main process 
-    std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result = face_app.getEmbeddings(frame); 
-    std::vector<std::vector<float>> embeddings = result.first; 
-    std::vector<std::pair<bool,int>> sex = result.second; 
+    std::pair<std::pair<std::vector<std::vector<float>>, 
+                        std::vector<std::pair<bool,int>>>, 
+              std::vector<std::pair<std::pair<int, int>,
+                                    std::pair<int, int>>>> result = face_app.getEmbeddings(frame); 
+
+    std::vector<std::vector<float>> embeddings = result.first.first; 
+    std::vector<std::pair<bool,int>> sex = result.first.second; 
+    std::vector<std::pair<std::pair<int, int>, std::pair<int, int>>> locs = result.second; 
 
     for (uint32_t i = 0; i < embeddings.size(); ++i) { 
       printf("%d\t%d\t", sex[i].first, sex[i].second); 
       vec::print(embeddings[i]); 
+    }
+
+    // Insert a new embedding
+    std::cout << getTime() << std::endl;
+
+    if (!embeddings.empty()) { 
+      std::string gender = "Female"; 
+      if (sex[0].first) { gender = "Male";}
+      std::string path = "/app/images/"; 
+      int id = insertToEmbeddings(
+        db, 
+        embeddings[0], 
+        path, 
+        gender, 
+        sex[0].second, 
+        errMsg
+      ); 
+
+      // Put the id on final frame 
+      cv::putText(frame, std::to_string(id), cv::Point(locs[0].first.first, locs[0].first.second),
+                cv::FONT_HERSHEY_SIMPLEX, // font face
+                1.0,                      // font scale
+                cv::Scalar(235, 125, 125),// color (B,G,R) → white
+                2);                       // thickness
+
+      cv::rectangle(frame,
+                    cv::Point(locs[0].first.first, locs[0].first.second),
+                    cv::Point(locs[0].first.first+25, locs[0].first.second-25),
+                    cv::Scalar(0, 0, 255),  // Green box
+                    2);    
+
     }
 
     cv::Mat output;
@@ -1082,16 +1226,23 @@ void processYOLO2(network* net, char** class_names, int num_classes, FaceApp& fa
     if (counter++ % YOLO_PROCESS_INTERVAL != 0) continue;
 
     // main process 
-    std::pair<std::vector<std::vector<float>>, std::vector<std::pair<bool,int>>> result = face_app.getEmbeddings(frame); 
-    std::vector<std::vector<float>> embeddings = result.first; 
-    std::vector<std::pair<bool,int>> sex = result.second; 
+    
+    // main process 
+    std::pair<std::pair<std::vector<std::vector<float>>, 
+                        std::vector<std::pair<bool,int>>>, 
+              std::vector<std::pair<std::pair<int, int>,
+                                    std::pair<int, int>>>> result = face_app.getEmbeddings(frame); 
+
+    std::vector<std::vector<float>> embeddings = result.first.first; 
+    std::vector<std::pair<bool,int>> sex = result.first.second; 
+    std::vector<std::pair<std::pair<int, int>, std::pair<int, int>>> locs = result.second; 
 
     for (uint32_t i = 0; i < embeddings.size(); ++i) { 
       printf("%d\t%d\t", sex[i].first, sex[i].second); 
       vec::print(embeddings[i]); 
     }
 
-    float sim = cosine_similarity(result.first[0], result.first[1]); 
+    float sim = cosine_similarity(embeddings[0], embeddings[1]); 
     std::cout << "Similarity: " << sim << std::endl; 
 
     cv::Scalar color;
@@ -1139,9 +1290,22 @@ int main(int argc, char* argv[]) {
     const char* create_table_sql =
         "CREATE TABLE IF NOT EXISTS embeddings ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        "label TEXT,"
-        "vector TEXT"
+        "name TEXT,"
+        "date TEXT,"
+        "vector TEXT,"
+        "path TEXT,"
+        "gender TEXT,"
+        "age INTEGER,"
+        "semantics TEXT,"
+        "camera TEXT"
         ");";
+
+//     const char* create_table_sql =
+//         "CREATE TABLE IF NOT EXISTS embeddings ("
+//         "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+//         "label TEXT,"
+//         "vector TEXT"
+//         ");";
     if (sqlite3_exec(db, create_table_sql, nullptr, nullptr, &errMsg) != SQLITE_OK) {
         std::cerr << "Error creating table: " << errMsg << "\n";
         sqlite3_free(errMsg);
@@ -1167,10 +1331,6 @@ int main(int argc, char* argv[]) {
     // create a dark net 
     if (!fileExists(CFG_FILE) || !fileExists(WEIGHTS_FILE) || !fileExists(NAMES_FILE)) {
       std::cerr << "Missing YOLO model files!" << std::endl;
-      return -1;
-    }
-    if (!readConfig()) {
-      std::cerr << "Failed to read source.txt config!" << std::endl;
       return -1;
     }
 
@@ -1225,7 +1385,14 @@ int main(int argc, char* argv[]) {
           inputs = result["input"].as<std::vector<std::string>>();
       }
 
-      if (mode == "o") {
+      if (inputs.empty()) { 
+        if (!readConfig()) {
+          std::cerr << "Failed to read source.txt config!" << std::endl;
+          return -1;
+        } // if (!readConfig())
+      } // if (inputs.empty())
+
+      if (mode == "p" || mode == "c" || mode == "pc" || mode == "cp") {
           if (inputs.size() != 1) {
               std::cerr << "Object mode requires exactly 1 input file." << std::endl;
               return 1;
@@ -1246,7 +1413,7 @@ int main(int argc, char* argv[]) {
             threads.emplace_back(captureStream, i, STREAM_URLS[i]);
           }
 
-          std::thread yolo_thread(processYOLO, net, class_names, class_list.size(), std::ref(face_app));
+          std::thread yolo_thread(processYOLO, net, class_names, class_list.size(), std::ref(face_app), std::ref(db), std::ref(errMsg));
 
           std::cout << "Streaming started... Press Ctrl+C to stop." << std::endl;
           for (auto &t : threads) t.join();
@@ -1264,26 +1431,12 @@ int main(int argc, char* argv[]) {
           std::vector<std::thread> threads;
           threads.emplace_back(captureStream, 0, input_file);
 
-          std::thread yolo_thread(processYOLO, net, class_names, class_list.size(), std::ref(face_app));
+          std::thread yolo_thread(processYOLO, net, class_names, class_list.size(), std::ref(face_app), std::ref(db), std::ref(errMsg));
 
           std::cout << "Streaming started... Press Ctrl+C to stop." << std::endl;
           for (auto &t : threads) t.join();
           yolo_thread.join();
 
-//             // Insert a new embedding
-//             std::string vec_str = vectorToString(embeddings[0]);
-//             std::string label = "person_001";
-// 
-//             std::string insert_sql =
-//                 "INSERT INTO embeddings (label, vector) VALUES ('" +
-//                 label + "', '" + vec_str + "');";
-// 
-//             if (sqlite3_exec(db, insert_sql.c_str(), nullptr, nullptr, &errMsg) != SQLITE_OK) {
-//                 std::cerr << "Error inserting data: " << errMsg << "\n";
-//                 sqlite3_free(errMsg);
-//             } else {
-//                 std::cout << "Inserted new embedding for: " << label << "\n";
-//             }
           return 1; 
         } // else if (inputs.size() == 1)
 
@@ -1316,7 +1469,6 @@ int main(int argc, char* argv[]) {
       std::cerr << "Error parsing options: " << e.what() << std::endl;
       return 1;
     }
-
 
     // Close DB
     sqlite3_close(db);
