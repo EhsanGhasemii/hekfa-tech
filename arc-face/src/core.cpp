@@ -1062,7 +1062,15 @@ int insertToEmbeddings(
 }
 
 
-void processYOLO(network* net, char** class_names, int num_classes, FaceApp& face_app, sqlite3*& db, char*& errMsg) {
+void processYOLO(
+  network* net,
+  char** class_names,
+  int num_classes,
+  FaceApp& face_app,
+  sqlite3*& db,
+  char*& errMsg, 
+  std::string mode
+) {
   std::string ffmpeg_cmd =
     "ffmpeg -hide_banner -loglevel warning -y "
     "-f rawvideo -vcodec rawvideo -pix_fmt bgr24 -s 640x480 -r 25 -i - "
@@ -1116,50 +1124,89 @@ void processYOLO(network* net, char** class_names, int num_classes, FaceApp& fac
     if (counter++ % YOLO_PROCESS_INTERVAL != 0) continue;
 
     // main process 
-    std::pair<std::pair<std::vector<std::vector<float>>, 
-                        std::vector<std::pair<bool,int>>>, 
-              std::vector<std::pair<std::pair<int, int>,
-                                    std::pair<int, int>>>> result = face_app.getEmbeddings(frame); 
+    if (mode == "arc-face") { 
+      std::pair<std::pair<std::vector<std::vector<float>>, 
+                          std::vector<std::pair<bool,int>>>, 
+                std::vector<std::pair<std::pair<int, int>,
+                                      std::pair<int, int>>>> result = face_app.getEmbeddings(frame); 
 
-    std::vector<std::vector<float>> embeddings = result.first.first; 
-    std::vector<std::pair<bool,int>> sex = result.first.second; 
-    std::vector<std::pair<std::pair<int, int>, std::pair<int, int>>> locs = result.second; 
+      std::vector<std::vector<float>> embeddings = result.first.first; 
+      std::vector<std::pair<bool,int>> sex = result.first.second; 
+      std::vector<std::pair<std::pair<int, int>, std::pair<int, int>>> locs = result.second; 
 
-    for (uint32_t i = 0; i < embeddings.size(); ++i) { 
-      printf("%d\t%d\t", sex[i].first, sex[i].second); 
-      vec::print(embeddings[i]); 
-    }
+      for (uint32_t i = 0; i < embeddings.size(); ++i) { 
+        printf("%d\t%d\t", sex[i].first, sex[i].second); 
+        vec::print(embeddings[i]); 
+      }
 
-    // Insert a new embedding
-    std::cout << getTime() << std::endl;
+      // Insert a new embedding
+      std::cout << getTime() << std::endl;
 
-    if (!embeddings.empty()) { 
-      std::string gender = "Female"; 
-      if (sex[0].first) { gender = "Male";}
-      std::string path = "/app/images/"; 
-      int id = insertToEmbeddings(
-        db, 
-        embeddings[0], 
-        path, 
-        gender, 
-        sex[0].second, 
-        errMsg
-      ); 
+      if (!embeddings.empty()) { 
+        std::string gender = "Female"; 
+        if (sex[0].first) { gender = "Male";}
+        std::string path = "/app/images/"; 
+        int id = insertToEmbeddings(
+          db, 
+          embeddings[0], 
+          path, 
+          gender, 
+          sex[0].second, 
+          errMsg
+        ); 
 
-      // Put the id on final frame 
-      cv::putText(frame, std::to_string(id), cv::Point(locs[0].first.first, locs[0].first.second),
-                cv::FONT_HERSHEY_SIMPLEX, // font face
-                1.0,                      // font scale
-                cv::Scalar(235, 125, 125),// color (B,G,R) → white
-                2);                       // thickness
+        // Put the id on final frame 
+        cv::putText(frame, std::to_string(id), cv::Point(locs[0].first.first, locs[0].first.second),
+                  cv::FONT_HERSHEY_SIMPLEX, // font face
+                  1.0,                      // font scale
+                  cv::Scalar(235, 125, 125),// color (B,G,R) → white
+                  2);                       // thickness
 
-      cv::rectangle(frame,
-                    cv::Point(locs[0].first.first, locs[0].first.second),
-                    cv::Point(locs[0].first.first+25, locs[0].first.second-25),
-                    cv::Scalar(0, 0, 255),  // Green box
-                    2);    
+        cv::rectangle(frame,
+                      cv::Point(locs[0].first.first, locs[0].first.second),
+                      cv::Point(locs[0].first.first+25, locs[0].first.second-25),
+                      cv::Scalar(0, 0, 255),  // Green box
+                      2);    
 
-    }
+      }
+    } // if (mode == "arc-face")
+    if (mode == "yolo") { 
+      image darknet_img = make_image(frame.cols, frame.rows, 3);
+      for (int y = 0; y < frame.rows; ++y) { 
+        for (int x = 0; x < frame.cols; ++x) {
+          cv::Vec3b p = frame.at<cv::Vec3b>(y, x);
+          darknet_img.data[x + y*frame.cols + 0*frame.cols*frame.rows] = p[2]/255.0f;
+          darknet_img.data[x + y*frame.cols + 1*frame.cols*frame.rows] = p[1]/255.0f;
+          darknet_img.data[x + y*frame.cols + 2*frame.cols*frame.rows] = p[0]/255.0f;
+        }
+      }
+
+      image sized = letterbox_image(darknet_img, net->w, net->h);
+      network_predict_ptr(net, sized.data);
+      int nboxes = 0;
+      detection* dets = get_network_boxes(net, frame.cols, frame.rows, CONF_THRESHOLD, CONF_THRESHOLD, nullptr, 1, &nboxes, 1);
+
+      if (dets) {
+        do_nms_sort(dets, nboxes, num_classes, NMS_THRESHOLD);
+        for (int i = 0; i < nboxes; ++i) {
+          for (int j = 0; j < num_classes; ++j) {
+            if (dets[i].prob[j] > CONF_THRESHOLD) {
+              box b = dets[i].bbox;
+              int x = (b.x - b.w/2) * frame.cols;
+              int y = (b.y - b.h/2) * frame.rows;
+              int w = b.w * frame.cols;
+              int h = b.h * frame.rows;
+              cv::rectangle(frame, cv::Rect(x,y,w,h), cv::Scalar(0,255,0), 2);
+              std::string label = std::string(class_names[j]) + ":" + std::to_string(dets[i].prob[j]).substr(0,4);
+              cv::putText(frame, label, cv::Point(x,y-5), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0,0,255), 2);
+            }
+          }
+        }
+        free_detections(dets, nboxes);
+      }
+      free_image(darknet_img);
+      free_image(sized);
+    } // if (mode == "yolo") 
 
     cv::Mat output;
     resize(frame, output, cv::Size(640,480));
@@ -1300,12 +1347,6 @@ int main(int argc, char* argv[]) {
         "camera TEXT"
         ");";
 
-//     const char* create_table_sql =
-//         "CREATE TABLE IF NOT EXISTS embeddings ("
-//         "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-//         "label TEXT,"
-//         "vector TEXT"
-//         ");";
     if (sqlite3_exec(db, create_table_sql, nullptr, nullptr, &errMsg) != SQLITE_OK) {
         std::cerr << "Error creating table: " << errMsg << "\n";
         sqlite3_free(errMsg);
@@ -1393,11 +1434,28 @@ int main(int argc, char* argv[]) {
       } // if (inputs.empty())
 
       if (mode == "p" || mode == "c" || mode == "pc" || mode == "cp") {
-          if (inputs.size() != 1) {
-              std::cerr << "Object mode requires exactly 1 input file." << std::endl;
-              return 1;
+        if (inputs.empty()) { 
+
+          std::vector<std::thread> threads;
+          for (size_t i=0; i<NUM_STREAMS; ++i) { 
+            threads.emplace_back(captureStream, i, STREAM_URLS[i]);
           }
-          std::cout << "Running object detection on: " << inputs[0] << std::endl;
+
+          std::thread yolo_thread(
+            processYOLO,
+            net,
+            class_names,
+            class_list.size(),
+            std::ref(face_app),
+            std::ref(db),
+            std::ref(errMsg), 
+            "yolo"
+          );
+
+          std::cout << "Streaming started... Press Ctrl+C to stop." << std::endl;
+          for (auto &t : threads) t.join();
+          yolo_thread.join();
+        } // if (inputs.empty())
       }
 
       else if (mode == "f") {
@@ -1413,7 +1471,16 @@ int main(int argc, char* argv[]) {
             threads.emplace_back(captureStream, i, STREAM_URLS[i]);
           }
 
-          std::thread yolo_thread(processYOLO, net, class_names, class_list.size(), std::ref(face_app), std::ref(db), std::ref(errMsg));
+          std::thread yolo_thread(
+            processYOLO,
+            net,
+            class_names,
+            class_list.size(),
+            std::ref(face_app),
+            std::ref(db),
+            std::ref(errMsg), 
+            "arc-face"
+          );
 
           std::cout << "Streaming started... Press Ctrl+C to stop." << std::endl;
           for (auto &t : threads) t.join();
@@ -1431,7 +1498,16 @@ int main(int argc, char* argv[]) {
           std::vector<std::thread> threads;
           threads.emplace_back(captureStream, 0, input_file);
 
-          std::thread yolo_thread(processYOLO, net, class_names, class_list.size(), std::ref(face_app), std::ref(db), std::ref(errMsg));
+          std::thread yolo_thread(
+            processYOLO,
+            net,
+            class_names,
+            class_list.size(),
+            std::ref(face_app),
+            std::ref(db),
+            std::ref(errMsg), 
+            "arc-face"
+          );
 
           std::cout << "Streaming started... Press Ctrl+C to stop." << std::endl;
           for (auto &t : threads) t.join();
@@ -1480,4 +1556,8 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
+
+
+
+
 
