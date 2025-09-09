@@ -37,6 +37,16 @@ double DISPLAY_TIME = 2.0;
 int YOLO_PROCESS_INTERVAL = 5;
 std::vector<std::string> STREAM_URLS;
 
+std::string ffmpeg_cmd =
+  "ffmpeg -hide_banner -loglevel warning -y "
+  "-f rawvideo -vcodec rawvideo -pix_fmt bgr24 -s 640x480 -r 25 -i - "
+  "-an -c:v libx264 -preset ultrafast -tune zerolatency "
+  "-g 25 -x264-params keyint=25:scenecut=0 "
+//     "-pix_fmt yuv420p "
+  "-pix_fmt yuv420p output_test.mp4 "
+  "-fflags nobuffer -flags low_delay -max_delay 0 -flush_packets 1 "
+  "-f mpegts "; 
+
 std::atomic<bool> running(true);
 std::mutex queue_mutex;
 std::queue<std::pair<int, cv::Mat>> frame_queue;
@@ -64,7 +74,7 @@ std::string getTime() {
     return std::string(buffer);
 }
 
-bool readConfig() {
+bool readConfig(bool read_flag) {
   std::ifstream file(CONFIG_FILE);
   if (!file.is_open()) return false;
 
@@ -75,16 +85,19 @@ bool readConfig() {
     std::string key;
     std::string value;
     if (getline(ss, key, '=') && getline(ss, value)) {
-      if (key == "NUM_STREAMS") NUM_STREAMS = std::stoul(value);
-      else if (key == "FRAME_WIDTH") width = std::stoi(value);
-      else if (key == "FRAME_HEIGHT") height = std::stoi(value);
-      else if (key == "DISPLAY_TIME") DISPLAY_TIME = std::stod(value);
-      else if (key == "YOLO_PROCESS_INTERVALL") YOLO_PROCESS_INTERVAL = std::stoi(value);
-      else if (key.find("STREAM_URL_") == 0) STREAM_URLS.push_back(value);
+      if (key == "NUM_STREAMS" && read_flag) NUM_STREAMS = std::stoul(value);
+      else if (key == "FRAME_WIDTH" && read_flag) width = std::stoi(value);
+      else if (key == "FRAME_HEIGHT" && read_flag) height = std::stoi(value);
+      else if (key == "DISPLAY_TIME" && read_flag) DISPLAY_TIME = std::stod(value);
+      else if (key == "YOLO_PROCESS_INTERVALL" && read_flag) YOLO_PROCESS_INTERVAL = std::stoi(value);
+      else if (key == "FFMPEG_CMD") ffmpeg_cmd += value;
+      else if (key.find("STREAM_URL_") == 0 && read_flag) STREAM_URLS.push_back(value);
     }
   }
   file.close();
-  FRAME_SIZE = cv::Size(width, height);
+  if (read_flag) { 
+    FRAME_SIZE = cv::Size(width, height);
+  }
   return NUM_STREAMS > 0 && width > 0 && height > 0 && STREAM_URLS.size() == NUM_STREAMS;
 } // bool readConfig()
 
@@ -1065,21 +1078,14 @@ int insertToEmbeddings(
 void processYOLO(
   network* net,
   char** class_names,
+  const std::vector<bool> class_flag, 
   int num_classes,
   FaceApp& face_app,
   sqlite3*& db,
   char*& errMsg, 
-  std::string mode
+  std::string mode, 
+  const std::string ffmpeg_cmd
 ) {
-  std::string ffmpeg_cmd =
-    "ffmpeg -hide_banner -loglevel warning -y "
-    "-f rawvideo -vcodec rawvideo -pix_fmt bgr24 -s 640x480 -r 25 -i - "
-    "-an -c:v libx264 -preset ultrafast -tune zerolatency "
-    "-g 25 -x264-params keyint=25:scenecut=0 "
-//     "-pix_fmt yuv420p "
-    "-pix_fmt yuv420p output_test.mp4 "
-    "-fflags nobuffer -flags low_delay -max_delay 0 -flush_packets 1 "
-    "-f mpegts udp://0.0.0.0:1234?pkt_size=1316";
 
   FILE* ffmpeg_pipe = popen(ffmpeg_cmd.c_str(), "w");
   if (!ffmpeg_pipe) {
@@ -1190,7 +1196,7 @@ void processYOLO(
         do_nms_sort(dets, nboxes, num_classes, NMS_THRESHOLD);
         for (int i = 0; i < nboxes; ++i) {
           for (int j = 0; j < num_classes; ++j) {
-            if (dets[i].prob[j] > CONF_THRESHOLD) {
+            if ((dets[i].prob[j] > CONF_THRESHOLD) && class_flag[j]) {
               box b = dets[i].bbox;
               int x = (b.x - b.w/2) * frame.cols;
               int y = (b.y - b.h/2) * frame.rows;
@@ -1219,16 +1225,13 @@ void processYOLO(
 
 
 
-void processYOLO2(network* net, char** class_names, int num_classes, FaceApp& face_app) {
-  std::string ffmpeg_cmd =
-    "ffmpeg -hide_banner -loglevel warning -y "
-    "-f rawvideo -vcodec rawvideo -pix_fmt bgr24 -s 640x480 -r 25 -i - "
-    "-an -c:v libx264 -preset ultrafast -tune zerolatency "
-    "-g 25 -x264-params keyint=25:scenecut=0 "
-//     "-pix_fmt yuv420p "
-    "-pix_fmt yuv420p output_test.mp4 "
-    "-fflags nobuffer -flags low_delay -max_delay 0 -flush_packets 1 "
-    "-f mpegts udp://0.0.0.0:1234?pkt_size=1316";
+void processYOLO2(
+  network* net,
+  char** class_names,
+  int num_classes,
+  FaceApp& face_app, 
+  const std::string ffmpeg_cmd
+) {
 
   FILE* ffmpeg_pipe = popen(ffmpeg_cmd.c_str(), "w");
   if (!ffmpeg_pipe) {
@@ -1321,6 +1324,38 @@ void processYOLO2(network* net, char** class_names, int num_classes, FaceApp& fa
 } // void processYOLO2
 
 
+void raise_flag(
+  std::vector<bool>& class_flag, 
+  std::vector<std::string> class_list, 
+  std::string mode
+) { 
+  for (uint32_t i = 0; i < class_list.size(); ++i) { 
+
+    if (mode == "p" || mode == "pc" || mode == "cp") { 
+      if (class_list[i] == "person") { 
+        class_flag[i] = true; 
+      } 
+    } 
+    if (mode == "c" || mode == "pc" || mode == "cp") { 
+      if (class_list[i] == "bicycle" ||
+          class_list[i] == "car" ||
+          class_list[i] == "motorbike" ||
+          class_list[i] == "aeroplane" ||
+          class_list[i] == "bus" ||
+          class_list[i] == "train" ||
+          class_list[i] == "truck" ||
+          class_list[i] == "boat"
+          ) { 
+        class_flag[i] = true; 
+      } 
+    } 
+    if (mode == "a") { 
+      class_flag[i] = true; 
+    } 
+    std::cout << class_list[i] << " " << class_flag[i] << std::endl;
+  } 
+} // void raise_flag
+
 
 int main(int argc, char* argv[]) {
 
@@ -1383,6 +1418,7 @@ int main(int argc, char* argv[]) {
     std::string name;
     while (getline(names_file, name)) class_list.push_back(name);
     names_file.close();
+    std::vector<bool> class_flag(class_list.size()); 
 
     char** class_names = (char**)calloc(class_list.size(), sizeof(char*));
     for (size_t i=0; i<class_list.size(); ++i) {
@@ -1427,13 +1463,30 @@ int main(int argc, char* argv[]) {
       }
 
       if (inputs.empty()) { 
-        if (!readConfig()) {
+        if (!readConfig(true)) {
           std::cerr << "Failed to read source.txt config!" << std::endl;
           return -1;
         } // if (!readConfig())
       } // if (inputs.empty())
+      else { 
+        readConfig(false);
+      } // if (inputs.empty())
 
-      if (mode == "p" || mode == "c" || mode == "pc" || mode == "cp") {
+
+      std::cout << "FFMPEG_CMD: " << ffmpeg_cmd << std::endl;
+
+      if (
+        mode == "p" || 
+        mode == "c" || 
+        mode == "pc" || 
+        mode == "cp" ||
+        mode == "a"
+      ) {
+        raise_flag(
+          class_flag,
+          class_list, 
+          mode
+        ); 
         if (inputs.empty()) { 
 
           std::vector<std::thread> threads;
@@ -1445,11 +1498,13 @@ int main(int argc, char* argv[]) {
             processYOLO,
             net,
             class_names,
+            class_flag, 
             class_list.size(),
             std::ref(face_app),
             std::ref(db),
             std::ref(errMsg), 
-            "yolo"
+            "yolo", 
+            ffmpeg_cmd
           );
 
           std::cout << "Streaming started... Press Ctrl+C to stop." << std::endl;
@@ -1475,11 +1530,13 @@ int main(int argc, char* argv[]) {
             processYOLO,
             net,
             class_names,
+            class_flag, 
             class_list.size(),
             std::ref(face_app),
             std::ref(db),
             std::ref(errMsg), 
-            "arc-face"
+            "arc-face", 
+            ffmpeg_cmd
           );
 
           std::cout << "Streaming started... Press Ctrl+C to stop." << std::endl;
@@ -1502,11 +1559,13 @@ int main(int argc, char* argv[]) {
             processYOLO,
             net,
             class_names,
+            class_flag, 
             class_list.size(),
             std::ref(face_app),
             std::ref(db),
             std::ref(errMsg), 
-            "arc-face"
+            "arc-face", 
+            ffmpeg_cmd
           );
 
           std::cout << "Streaming started... Press Ctrl+C to stop." << std::endl;
@@ -1526,7 +1585,14 @@ int main(int argc, char* argv[]) {
           std::vector<std::thread> threads;
           threads.emplace_back(captureStreams, 0, input_file, input_file2);
 
-          std::thread yolo_thread(processYOLO2, net, class_names, class_list.size(), std::ref(face_app));
+          std::thread yolo_thread(
+            processYOLO2,
+            net,
+            class_names,
+            class_list.size(),
+            std::ref(face_app), 
+            ffmpeg_cmd
+          );
 
           std::cout << "Streaming started... Press Ctrl+C to stop." << std::endl;
           for (auto &t : threads) t.join();
