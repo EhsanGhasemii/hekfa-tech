@@ -1511,6 +1511,35 @@ int main(int argc, char* argv[]) {
           for (auto &t : threads) t.join();
           yolo_thread.join();
         } // if (inputs.empty())
+
+        else if (inputs.size() == 1) {
+          
+          // extract image file name
+          std::string input_file = inputs[0]; 
+
+          std::vector<std::thread> threads;
+          threads.emplace_back(captureStream, 0, input_file);
+
+          std::thread yolo_thread(
+            processYOLO,
+            net,
+            class_names,
+            class_flag, 
+            class_list.size(),
+            std::ref(face_app),
+            std::ref(db),
+            std::ref(errMsg), 
+            "yolo", 
+            ffmpeg_cmd
+          );
+
+          std::cout << "Streaming started... Press Ctrl+C to stop." << std::endl;
+          for (auto &t : threads) t.join();
+          yolo_thread.join();
+
+          return 1; 
+        } // else if (inputs.size() == 1)
+
       }
 
       else if (mode == "f") {
